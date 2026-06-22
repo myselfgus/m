@@ -10,6 +10,14 @@ pat/
 audio/
 debug_*.json
 .DS_Store
+
+# SwiftUI app — artefatos de build (não versionar binários)
+ui-swift/.build/
+*.app/
+
+# config de launch local (paths absolutos da máquina)
+.claude/
+
 # imagens originais com nome UUID (cópias semânticas em assets/)
 [0-9A-F][0-9A-F][0-9A-F][0-9A-F][0-9A-F][0-9A-F][0-9A-F][0-9A-F]-*.PNG
 [0-9A-F][0-9A-F][0-9A-F][0-9A-F][0-9A-F][0-9A-F][0-9A-F][0-9A-F]-*.jpg

@@ -100,8 +100,43 @@ def soap_longitudinal_task(patient_id: str, dates: list[str], *, model: str | No
     return str(stage.run(patient_id, dates, model=model, force=force))
 
 
+@celery_app.task(name="m_engine.pipeline")
+def pipeline_task(
+    audio_path: str,
+    *,
+    diarize: bool = True,
+    deep: bool = True,
+    model: str | None = None,
+    force: bool = False,
+) -> str:
+    """
+    Pipeline completo de UMA sessão a partir do áudio (mesma topologia do `m ingest`):
+    transcribe → [Ramo A: birp] e [Ramo B: normalize → asl → dim → gem → soap_t].
+    Roda síncrono no worker (1 job_id para a UI acompanhar). Retorna o path do SOAP
+    trajetorial (ramo B) ou da transcrição (se deep=False).
+    """
+    from m_engine.stages import (  # import lazy
+        asl, birp, dimensional, gem, normalize, soap_trajetorial, transcribe,
+    )
+
+    transcription_json = transcribe.run_file(audio_path, diarize=diarize, force=force)
+    # Ramo A — nota clínica imediata; também estabelece dossiê + info.json.
+    birp.run(transcription_json, model=model, force=force)
+    # Ramo B — análise profunda.
+    norm_path = normalize.run(transcription_json, model=model, force=force)
+    if not deep:
+        return str(norm_path)
+    patient_id = norm_path.parent.parent.name
+    date = norm_path.stem.replace("_transcription", "")
+    asl.run(patient_id, date, model=model, force=force)
+    dimensional.run(patient_id, date, model=model, force=force)
+    gem.run(patient_id, date, model=model, force=force)
+    return str(soap_trajetorial.run(patient_id, date, model=model, force=force))
+
+
 # Mapa stage -> task, consumido pela API para enfileirar por nome de stage.
 STAGE_TASKS = {
+    "pipeline": pipeline_task,
     "transcribe": transcribe_task,
     "birp": birp_task,
     "normalize": normalize_task,

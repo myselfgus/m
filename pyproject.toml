@@ -12,6 +12,7 @@ dependencies = [
     "tenacity>=8.3",         # retry/backoff
     "typer>=0.12",           # CLI
     "fastapi>=0.111",        # API
+    "python-multipart>=0.0.9", # upload de áudio (multipart/form-data)
     "uvicorn[standard]>=0.30",
     "celery>=5.4",           # fila de jobs longos
     "redis>=5.0",

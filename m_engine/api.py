@@ -13,15 +13,20 @@ Endpoints:
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Optional
 
 from celery.result import AsyncResult
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
 
 from m_engine.config import get_settings
-from m_engine.store import pat_dir
+from m_engine.store import load_info, pat_dir
 from m_engine.tasks import STAGE_TASKS, celery_app
+
+# Extensões de áudio/vídeo aceitas no upload (mesma lista do stage transcribe).
+AUDIO_EXTS = {".m4a", ".mp3", ".wav", ".aac", ".flac", ".ogg", ".webm", ".mp4", ".mov"}
 
 app = FastAPI(
     title="M-Engine API",
@@ -54,7 +59,8 @@ class JobRequest(BaseModel):
     # Comuns: model (alias; None => Opus 4.8) e force.
     model: Optional[str] = Field(default=None, description="Alias do modelo; None => Claude Opus 4.8.")
     force: bool = False
-    diarize: bool = True  # usado apenas pelo stage transcribe
+    diarize: bool = True  # usado por transcribe/pipeline
+    deep: bool = True  # pipeline: roda o ramo B completo (asl→dim→gem→soap)
 
 
 class JobResponse(BaseModel):
@@ -92,6 +98,16 @@ def _build_args(stage: str, req: JobRequest) -> tuple[tuple, dict]:
         if not req.audio_path:
             raise HTTPException(422, "audio_path é obrigatório para 'transcribe'.")
         return (req.audio_path,), {"diarize": req.diarize, "force": req.force}
+
+    if stage == "pipeline":
+        if not req.audio_path:
+            raise HTTPException(422, "audio_path é obrigatório para 'pipeline'.")
+        return (req.audio_path,), {
+            "diarize": req.diarize,
+            "deep": req.deep,
+            "model": req.model,
+            "force": req.force,
+        }
 
     if stage == "normalize":
         if not req.transcription_json_path:
@@ -148,6 +164,68 @@ def list_patients() -> PatientsResponse:
     base = pat_dir()
     patients = sorted(child.name for child in base.iterdir() if child.is_dir())
     return PatientsResponse(patients=patients)
+
+
+class UploadResponse(BaseModel):
+    filename: str
+    path: str  # caminho absoluto salvo em $M_BASE/audio
+
+
+@app.post("/audio", response_model=UploadResponse)
+async def upload_audio(file: UploadFile = File(...)) -> UploadResponse:
+    """
+    Recebe um arquivo de áudio e o grava em $M_BASE/audio (entrada do STT).
+    Não dispara processamento — a UI chama depois POST /jobs/pipeline com o path.
+    """
+    name = Path(file.filename or "").name  # evita path traversal
+    if not name:
+        raise HTTPException(422, "Nome de arquivo ausente.")
+    if Path(name).suffix.lower() not in AUDIO_EXTS:
+        raise HTTPException(422, f"Extensão não suportada. Aceitas: {sorted(AUDIO_EXTS)}")
+
+    audio_dir = get_settings().audio_dir
+    audio_dir.mkdir(parents=True, exist_ok=True)
+    dest = audio_dir / name
+
+    data = await file.read()
+    if not data:
+        raise HTTPException(422, "Arquivo de áudio vazio.")
+    dest.write_bytes(data)
+    return UploadResponse(filename=name, path=str(dest))
+
+
+class DocumentsResponse(BaseModel):
+    patient_id: str
+    documents: list[str]
+
+
+@app.get("/patients/{patient_id}/documents", response_model=DocumentsResponse)
+def list_documents(patient_id: str) -> DocumentsResponse:
+    """Lista os documentos clínicos (.md) gerados no dossiê do paciente."""
+    docs_dir = pat_dir() / patient_id / "clinical-documents"
+    if not docs_dir.is_dir():
+        raise HTTPException(404, f"Paciente sem documentos: {patient_id}")
+    docs = sorted(p.name for p in docs_dir.glob("*.md"))
+    return DocumentsResponse(patient_id=patient_id, documents=docs)
+
+
+@app.get("/patients/{patient_id}/documents/{name}", response_class=PlainTextResponse)
+def get_document(patient_id: str, name: str) -> str:
+    """Retorna o conteúdo (Markdown) de um documento clínico."""
+    safe = Path(name).name  # evita path traversal
+    path = pat_dir() / patient_id / "clinical-documents" / safe
+    if not path.is_file():
+        raise HTTPException(404, f"Documento não encontrado: {safe}")
+    return path.read_text(encoding="utf-8")
+
+
+@app.get("/patients/{patient_id}/info")
+def get_patient_info(patient_id: str) -> dict:
+    """Retorna o info.json do paciente (metadados + clinical_summary)."""
+    info = load_info(patient_id)
+    if not info:
+        raise HTTPException(404, f"info.json ausente para {patient_id}")
+    return info
 
 
 @app.get("/healthz")
