@@ -154,7 +154,12 @@ def _generate_therapeutic_plan(
 
     # Recortes-chave do legado (navegação defensiva — ASL/VDLP são dicts livres).
     asl_metrics = (asl.get("linguistic_analysis") or {}).get("metricas_quantitativas") or {}
-    vdlp_dims = (vdlp.get("dimensional_analysis") or {}).get("dimensoes") or {}
+    vdlp_dims = (vdlp.get("dimensional_analysis") or {}).get("dimensoes_espaco_mental") or {}
+    if not vdlp_dims:
+        raise ValueError(
+            "VDLP sem 'dimensoes_espaco_mental' — plano não pode ser gerado sobre dimensões vazias. "
+            "Rode/reprocesse o stage 'dimensional'."
+        )
     vdlp_dims_block = _dump(vdlp_dims)[:_TRUNC_VDLP_PLANO]
 
     if gem is not None:

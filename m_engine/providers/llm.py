@@ -9,7 +9,7 @@ Roteia por provider direto:
 Expõe:
   - complete(...)        -> CompletionResult (texto)
   - complete_json(...)   -> instância de um modelo pydantic (valida + 1 repair)
-  - extract_json(...)    -> dict, com auto-correção por regex (fallback determinístico)
+  - extract_json(...)    -> dict, parse ESTRITO (sem alterar conteúdo; raise em falha)
 
 Default de modelo: config.resolve_model(None) == Claude Opus 4.8.
 """
@@ -201,7 +201,10 @@ def _complete_anthropic(spec, blocks, user, max_tokens, temperature, cache, time
         usage.cache_read += getattr(u, "cache_read_input_tokens", 0) or 0
         usage.cache_write += getattr(u, "cache_creation_input_tokens", 0) or 0
 
-        if resp.stop_reason == "max_tokens" and cont < max_cont:
+        if resp.stop_reason == "max_tokens":
+            if cont >= max_cont:
+                # Ainda truncado após o limite de continuações → ERRO (não devolver parcial).
+                raise RuntimeError(f"Saída truncada após {max_cont} continuações (anthropic {spec.id}).")
             cont += 1
             # Echo do conteúdo COMPLETO (inclui thinking blocks) — exigido para continuar
             # na mesma sessão com adaptive thinking; passar só o texto quebraria a sequência.
@@ -231,7 +234,9 @@ def _complete_openai_compat(spec, blocks, user, max_tokens, temperature, timeout
             usage.input += resp.usage.prompt_tokens or 0
             usage.output += resp.usage.completion_tokens or 0
 
-        if choice.finish_reason == "length" and cont < max_cont:
+        if choice.finish_reason == "length":
+            if cont >= max_cont:
+                raise RuntimeError(f"Saída truncada após {max_cont} continuações ({spec.provider} {spec.id}).")
             cont += 1
             messages.append({"role": "assistant", "content": text})
             messages.append({"role": "user", "content": "Continue exatamente de onde parou, sem repetir o que já escreveu."})
@@ -279,17 +284,22 @@ def _complete_claude_cli(spec, blocks, user, timeout) -> CompletionResult:
         raise RuntimeError(f"claude CLI falhou (exit {proc.returncode}): {proc.stderr[:500]}")
 
     out = (proc.stdout or "").strip()
-    content, usage = out, Usage()
+    # --output-format json DEVE devolver JSON com a chave "result". Saída fora disso
+    # é erro (NÃO usar stdout cru como se fosse a resposta — degradação silenciosa).
     try:
         data = json.loads(out)
-        content = data.get("result", out)
-        u = data.get("usage") or {}
-        usage.input = u.get("input_tokens", 0) or 0
-        usage.output = u.get("output_tokens", 0) or 0
-        usage.cache_read = u.get("cache_read_input_tokens", 0) or 0
-        usage.cache_write = u.get("cache_creation_input_tokens", 0) or 0
-    except json.JSONDecodeError:
-        pass  # --output-format text ou saída inesperada: usa stdout cru
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"claude CLI: saída não-JSON com --output-format json: {out[:500]}") from exc
+    if "result" not in data:
+        raise RuntimeError(f"claude CLI: JSON sem campo 'result': {out[:500]}")
+
+    content = data["result"]
+    usage = Usage()
+    u = data.get("usage") or {}
+    usage.input = u.get("input_tokens", 0) or 0
+    usage.output = u.get("output_tokens", 0) or 0
+    usage.cache_read = u.get("cache_read_input_tokens", 0) or 0
+    usage.cache_write = u.get("cache_creation_input_tokens", 0) or 0
 
     return CompletionResult(content, usage, spec.id, spec.provider, 0)
 
@@ -301,11 +311,15 @@ def _complete_claude_cli(spec, blocks, user, timeout) -> CompletionResult:
 
 def extract_json(response: str, debug_name: str = "json") -> dict:
     """
-    Extrai JSON via depth-counting e aplica auto-correções progressivas:
-      1) remove anotações entre parênteses após strings:  "x" (cmt) -> "x"
-      2) remove trailing commas
-      3) ambas
-    Em falha total, grava o malformado em $M_BASE/_debug/debug_<name>.json.
+    Extrai JSON de forma DETERMINÍSTICA, sem ALTERAR conteúdo:
+      1) remove cercas de markdown (```json / ```)
+      2) localiza o objeto por contagem de profundidade de chaves
+      3) json.loads sobre o trecho extraído EXATAMENTE como veio
+
+    POLÍTICA: nenhuma regex que altere conteúdo (ex.: apagar "(...)" após
+    strings) é aplicada — isso poderia corromper dado clínico em silêncio.
+    Em falha de parse, grava o malformado em $M_BASE/_debug/debug_<name>.json
+    apenas para diagnóstico e LEVANTA erro (sem devolver nada "consertado").
     """
     text = response.strip()
     text = re.sub(r"```json\n?", "", text)
@@ -326,22 +340,16 @@ def extract_json(response: str, debug_name: str = "json") -> dict:
                 break
     raw = text[start:end]
 
-    for attempt in (
-        lambda s: s,
-        lambda s: re.sub(r'"([^"]*?)"\s*\([^)]+\)', r'"\1"', s),
-        lambda s: re.sub(r",(\s*[}\]])", r"\1", s),
-        lambda s: re.sub(r",(\s*[}\]])", r"\1", re.sub(r'"([^"]*?)"\s*\([^)]+\)', r'"\1"', s)),
-    ):
-        try:
-            return json.loads(attempt(raw))
-        except json.JSONDecodeError:
-            continue
-
-    debug_dir = get_settings().debug_dir
-    debug_dir.mkdir(parents=True, exist_ok=True)
-    path = debug_dir / f"debug_{debug_name}.json"
-    Path(path).write_text(raw, encoding="utf-8")
-    raise ValueError(f"Falha ao parsear JSON ({debug_name}). Salvo em {path}")
+    # Único parse permitido: json.loads sobre o trecho cru, sem mutação.
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as err:
+        # Dump de debug antes de levantar — diagnóstico, não auto-correção.
+        debug_dir = get_settings().debug_dir
+        debug_dir.mkdir(parents=True, exist_ok=True)
+        path = debug_dir / f"debug_{debug_name}.json"
+        Path(path).write_text(raw, encoding="utf-8")
+        raise ValueError(f"Falha ao parsear JSON ({debug_name}). Salvo em {path}") from err
 
 
 def complete_json(
@@ -359,10 +367,11 @@ def complete_json(
 ) -> T:
     """
     Completa e valida contra um schema pydantic.
-    Pipeline de robustez (cobre a 'auto-correção' de TODOS os stages, inclusive GEM):
-      1) extract_json (depth-count + correções regex)
-      2) schema.model_validate
-      3) se falhar e repair=True: 1 rodada de repair pedindo conformidade ao LLM
+    Pipeline de robustez (ÚNICO fallback permitido na política):
+      1) extract_json (parse estrito, sem alterar conteúdo)
+      2) schema.model_validate (schema ESTRITO → payload vazio/incompleto FALHA)
+      3) se falhar e repair=True: 1 rodada de repair pedindo conformidade ao LLM;
+         se a revalidação ainda falhar → raise (sem degradação).
     """
     res = complete(
         system=system, user=user, model=model, max_tokens=max_tokens,

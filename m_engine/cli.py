@@ -20,6 +20,8 @@ from typing import Optional
 
 import typer
 
+from m_engine.config import get_settings
+
 app = typer.Typer(
     name="m",
     help="M-Engine — pipeline clínico-linguístico (transcrição → ASL → dimensional → GEM → SOAP).",

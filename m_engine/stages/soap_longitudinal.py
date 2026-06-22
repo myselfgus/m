@@ -189,7 +189,9 @@ def _build_plan_user_prompt(soa: str, sessions: list[_Session]) -> str:
     """User prompt da seção P — usa a análise S/O/A + a consulta mais recente (porte do legado)."""
     latest = sessions[-1]
     # Dimensões atuais: tenta o caminho do legado, com fallback tolerante ao schema.
-    dims = (latest.vdlp.get("dimensional_analysis") or {}).get("dimensoes") or {}
+    dims = (latest.vdlp.get("dimensional_analysis") or {}).get("dimensoes_espaco_mental") or {}
+    if not dims:
+        raise ValueError("VDLP da consulta mais recente sem 'dimensoes_espaco_mental'.")
     dims_text = json.dumps(dims, ensure_ascii=False, indent=2)[:_MAX_DIMS_CHARS]
 
     return f"""# ANÁLISE EVOLUTIVA PRÉVIA (S+O+A)

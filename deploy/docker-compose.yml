@@ -43,7 +43,7 @@ services:
       M_BASE: /var/lib/m-engine
     volumes:
       # Volume de dados clínicos (PHI). ${M_BASE} no host -> /var/lib/m-engine no container.
-      - ${M_BASE:-./_data}:/var/lib/m-engine
+      - ${M_BASE:?M_BASE deve ser definido (volume de PHI; sem default silencioso)}:/var/lib/m-engine
     ports:
       - "${M_API_PORT:-8000}:8000"
     depends_on:
@@ -66,7 +66,7 @@ services:
       M_BASE: /var/lib/m-engine
     volumes:
       # MESMO volume da API: stages leem/escrevem o dossiê do paciente.
-      - ${M_BASE:-./_data}:/var/lib/m-engine
+      - ${M_BASE:?M_BASE deve ser definido (volume de PHI; sem default silencioso)}:/var/lib/m-engine
     depends_on:
       redis:
         condition: service_healthy
