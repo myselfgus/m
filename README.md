@@ -1,57 +1,40 @@
-# M-Engine
-
-Pipeline clínico-linguístico que transforma o áudio de uma sessão em artefatos
-estruturados: **transcrição → normalização → ASL (análise sistêmica linguística)
-→ análise dimensional → GEM → narrativa → documentos SOAP**.
-
-O M-Engine fala **direto** com os providers de modelo (sem gateway intermediário):
-Anthropic (default **Claude Opus 4.8**), xAI (Grok) e DeepSeek — estes dois últimos
-apenas quando selecionados explicitamente. A transcrição usa ElevenLabs (Scribe).
-
-Os dados de cada paciente (PHI — *Protected Health Information*) ficam em arquivos
-sob `$M_BASE/pat`, em um volume dedicado.
+<div align="center">
+  <img src="assets/m-hero.png" alt="M-Engine — Mental Space Manifold" width="540" />
+  <h1>M-Engine</h1>
+  <p><strong>Pipeline clínico-linguístico · áudio → artefatos estruturados</strong></p>
+  <p>
+    <img src="https://img.shields.io/badge/Python-3.11+-1a1a2e?style=flat-square&logo=python&logoColor=white" alt="Python" />
+    <img src="https://img.shields.io/badge/Claude_Opus_4.8-default-0f3460?style=flat-square" alt="Claude Opus 4.8" />
+    <img src="https://img.shields.io/badge/FastAPI-0.111-16213e?style=flat-square&logo=fastapi&logoColor=white" alt="FastAPI" />
+    <img src="https://img.shields.io/badge/Celery-5.4-533483?style=flat-square" alt="Celery" />
+    <img src="https://img.shields.io/badge/Redis-broker-e94560?style=flat-square&logo=redis&logoColor=white" alt="Redis" />
+  </p>
+</div>
 
 ---
 
-## Arquitetura
+Transforma o áudio de uma sessão clínica em artefatos estruturados através de um pipeline linguístico em camadas:
 
-### Stages do pipeline
+**transcrição → normalização → ASL → dimensional → GEM → narrativa → SOAP**
 
-Cada stage tem um contrato estável (ver `m_engine/stages/__init__.py`) e é
-idempotente: se o artefato já existe e `force=False`, o caminho é retornado sem
-reprocessar.
+O M-Engine fala **direto** com os providers de modelo (sem gateway intermediário): Anthropic (**Claude Opus 4.8**, default), xAI (Grok) e DeepSeek. A transcrição usa ElevenLabs Scribe com diarização. Os dados de cada paciente (PHI) ficam em `$M_BASE/pat`, em volume dedicado.
 
-| Stage              | Entrada                         | Saída (em `$M_BASE/pat/<PID>/`)              |
-|--------------------|---------------------------------|----------------------------------------------|
-| `transcribe`       | arquivo de áudio                | `audio/transcriptions/*.json`                |
-| `normalize`        | transcrição JSON                | cria/atualiza o dossiê + `transcriptions/`   |
-| `asl`              | dossiê + data                   | `linguistic-analysis/<PID>_<DATE>_ASL.json`  |
-| `dimensional`      | ASL                             | `dimensional-analysis/<PID>_<DATE>_DIMENSIONAL.json` |
-| `gem`              | dimensional                     | `gem/<PID>_<DATE>_GEM.json`                  |
-| `narrative`        | gem                             | `narrative/`                                 |
-| `soap_trajetorial` | artefatos de uma data           | `clinical-documents/<PID>_SOAP_*.md`         |
-| `soap_longitudinal`| artefatos de várias datas       | `clinical-documents/<PID>_SOAP_*.md`         |
+---
 
-Identidade do paciente: `PATIENT_ID = PAT_<INICIAIS>_<NN>` (sequencial),
-gerado em `m_engine/store.py`.
+## Pipeline
 
-### Componentes
+<div align="center">
+  <img src="assets/m-wave.png" alt="Mental Space M" width="640" />
+  <br/><sub>mental space M — o espaço topológico que o pipeline percorre</sub>
+</div>
 
-- **CLI `m`** (Typer) — operação manual stage a stage.
-- **API** (FastAPI) — `m_engine.api:app`, dispara/consulta jobs.
-- **Worker** (Celery) — `m_engine.tasks`, executa stages longos fora do request.
-- **Redis** — broker/result-backend do Celery.
-- **`m_engine/config.py`** — ponto único de verdade: chaves de API, paths
-  derivados de `M_BASE` e registro de modelos.
-- **`m_engine/store.py`** — naming unificado dos artefatos e identidade do paciente.
-- **`m_engine/providers/`** — `llm.py` (chamadas diretas + extração de JSON) e
-  `transcription.py` (ElevenLabs).
+<br/>
 
-### Fluxo do pipeline
+### Fluxo completo
 
 ```mermaid
 flowchart LR
-    A[áudio] --> T[transcribe]
+    A([🎙 áudio]) --> T[transcribe]
     T --> N[normalize]
     N --> ASL[asl]
     ASL --> D[dimensional]
@@ -59,32 +42,85 @@ flowchart LR
     G --> NR[narrative]
     G --> ST[soap_trajetorial]
     G --> SL[soap_longitudinal]
-    NR --> OUT[($M_BASE/pat/&lt;PID&gt;/)]
-    ST --> OUT
-    SL --> OUT
+
+    NR --> FS[($M_BASE/pat/&lt;PID&gt;/)]
+    ST --> FS
+    SL --> FS
+
+    style A fill:#0f3460,color:#fff,stroke:none
+    style FS fill:#1a1a2e,color:#aaa,stroke:none
 ```
 
-### Componentes e fluxo de execução
+### Stages
+
+| Stage              | Entrada                  | Saída em `$M_BASE/pat/<PID>/`                        |
+|--------------------|--------------------------|------------------------------------------------------|
+| `transcribe`       | arquivo de áudio         | `audio/transcriptions/*.json`                        |
+| `normalize`        | transcrição JSON         | cria/atualiza dossiê + `transcriptions/`             |
+| `asl`              | dossiê + data            | `linguistic-analysis/<PID>_<DATE>_ASL.json`          |
+| `dimensional`      | ASL                      | `dimensional-analysis/<PID>_<DATE>_DIMENSIONAL.json` |
+| `gem`              | dimensional              | `gem/<PID>_<DATE>_GEM.json`                          |
+| `narrative`        | gem                      | `narrative/`                                         |
+| `soap_trajetorial` | artefatos de uma data    | `clinical-documents/<PID>_SOAP_*.md`                 |
+| `soap_longitudinal`| artefatos de várias datas| `clinical-documents/<PID>_SOAP_*.md`                 |
+
+Identidade do paciente: `PATIENT_ID = PAT_<INICIAIS>_<NN>` (sequencial) — gerado em `m_engine/store.py`.
+
+Cada stage é **idempotente**: se o artefato já existe e `force=False`, retorna o caminho sem reprocessar.
+
+---
+
+## Arquitetura
+
+### Componentes e execução
 
 ```mermaid
 flowchart TB
-    subgraph entrypoints[Entradas]
-        CLI["CLI m (Typer)"]
-        API["API (FastAPI)"]
+    subgraph entrypoints["Entradas"]
+        direction LR
+        CLI["⌨ CLI m\n(Typer)"]
+        API["🌐 API\n(FastAPI)"]
     end
-    API -->|enfileira jobs longos| Q[(Redis broker)]
-    Q --> W["Worker (Celery)"]
+
+    API -->|enfileira jobs longos| Q[(Redis\nbroker)]
+    Q --> W["⚙ Worker\n(Celery)"]
+
     CLI --> STAGES
     API --> STAGES
     W --> STAGES
-    subgraph STAGES[Stages]
+
+    subgraph STAGES["Stages — m_engine/stages/"]
         direction LR
-        S1[transcribe] --> S2[normalize] --> S3[asl] --> S4[dimensional] --> S5[gem] --> S6[narrative / soap_*]
+        S1[transcribe] --> S2[normalize] --> S3[asl] --> S4[dimensional] --> S5[gem] --> S6["narrative\nsoap_*"]
     end
-    STAGES --> CFG[config.py / store.py]
-    STAGES --> PROV["providers (Anthropic / xAI / DeepSeek / ElevenLabs)"]
-    CFG --> FS[($M_BASE/pat — PHI)]
+
+    STAGES --> CFG["config.py\nstore.py"]
+    STAGES --> PROV["providers/\nllm · transcription"]
+
+    PROV --> EXT["☁ Anthropic · xAI\nDeepSeek · ElevenLabs"]
+    CFG --> FS[("$M_BASE/pat\n— PHI —")]
     STAGES --> FS
+
+    style FS fill:#1a1a2e,color:#ccc,stroke:#533483
+    style EXT fill:#0f3460,color:#fff,stroke:none
+```
+
+### Árvore de módulos
+
+```
+m_engine/
+├── cli.py              ← entrypoint CLI (Typer)
+├── api.py              ← FastAPI app
+├── tasks.py            ← jobs Celery
+├── config.py           ← ponto único de config / model registry
+├── store.py            ← naming de artefatos + identity do paciente
+├── util.py             ← helpers (extract_json, retry, …)
+├── providers/
+│   ├── llm.py          ← chamadas diretas Anthropic / xAI / DeepSeek
+│   └── transcription.py← ElevenLabs Scribe
+├── schemas/            ← Pydantic v2 (ASL, dimensional, GEM, …)
+├── stages/             ← um módulo por stage (contratos em __init__)
+└── prompts/            ← system prompts .md por stage
 ```
 
 ---
@@ -94,147 +130,132 @@ flowchart TB
 Requer **Python 3.11+**.
 
 ```bash
-git clone <repo> m-engine && cd m-engine
+git clone https://github.com/myselfgus/m.git m-engine && cd m-engine
 
 python3.11 -m venv .venv
 source .venv/bin/activate
 
 pip install .          # instala o pacote e o entrypoint `m`
-# Para desenvolvimento, instale também as ferramentas de teste:
-pip install pytest
+pip install pytest     # para testes
 ```
-
-O comando `m` fica disponível após a instalação (definido em `[project.scripts]`).
 
 ---
 
 ## Configuração (`.env`)
 
-Copie o exemplo e preencha as chaves. O arquivo `.env` **não** vai para o git.
-
 ```bash
-cp .env.example .env
+cp .env.example .env   # preencha as chaves — .env não vai ao git
 ```
 
-| Variável             | Descrição                                                        |
-|----------------------|------------------------------------------------------------------|
-| `M_BASE`             | Raiz dos dados (dossiês em `$M_BASE/pat`, áudio em `$M_BASE/audio`). |
-| `ANTHROPIC_API_KEY`  | Chave Anthropic (provider default).                              |
-| `XAI_API_KEY`        | Chave xAI/Grok (opcional, só em seleção explícita).             |
-| `DEEPSEEK_API_KEY`   | Chave DeepSeek (opcional, só em seleção explícita).             |
-| `ELEVENLABS_API_KEY` | Chave de transcrição (Scribe).                                  |
-| `REDIS_URL`          | Broker/result-backend do Celery.                               |
-| `M_API_HOST`         | Host da API (default `0.0.0.0`).                                |
-| `M_API_PORT`         | Porta da API (default `8000`).                                  |
-| `M_DEFAULT_MODEL`    | Override opcional do modelo default. Aliases: `opus` (default), `sonnet`, `haiku`, `grok`, `deepseek`, `deepseekr`. |
+| Variável             | Descrição                                                            |
+|----------------------|----------------------------------------------------------------------|
+| `M_BASE`             | Raiz dos dados (`$M_BASE/pat`, `$M_BASE/audio`).                    |
+| `ANTHROPIC_API_KEY`  | Provider default.                                                    |
+| `XAI_API_KEY`        | Opcional — só em seleção explícita.                                 |
+| `DEEPSEEK_API_KEY`   | Opcional — só em seleção explícita.                                 |
+| `ELEVENLABS_API_KEY` | Transcrição (Scribe).                                               |
+| `REDIS_URL`          | Broker/result-backend do Celery.                                    |
+| `M_API_HOST`         | Default `0.0.0.0`.                                                  |
+| `M_API_PORT`         | Default `8000`.                                                     |
+| `M_DEFAULT_MODEL`    | Aliases: `opus` (default), `sonnet`, `haiku`, `grok`, `deepseek`.  |
 
-O default de **todos** os stages é `opus` (Claude Opus 4.8). xAI e DeepSeek nunca
-são default — só entram quando passados explicitamente via `--model`.
+O default de todos os stages é **`opus`** (Claude Opus 4.8). xAI e DeepSeek nunca são default — só entram via `--model`.
 
 ---
 
 ## Uso — CLI `m`
 
 ```bash
-# 1) Transcrever um áudio (ElevenLabs, com diarização)
+# 1. Transcrever (ElevenLabs, com diarização)
 m transcribe /caminho/sessao.m4a
 
-# 2) Normalizar a transcrição → cria/atualiza o dossiê do paciente
+# 2. Normalizar → cria/atualiza dossiê
 m normalize $M_BASE/audio/transcriptions/2026-06-22_transcription.json
 
-# 3) Rodar stages individuais para um paciente/data
+# 3. Stages individuais
 m asl          PAT_JS_01 2026-06-22
 m dimensional  PAT_JS_01 2026-06-22
 m gem          PAT_JS_01 2026-06-22
 m narrative    PAT_JS_01 2026-06-22
 
-# 4) Documentos SOAP
-m soap PAT_JS_01 2026-06-22                       # trajetorial (uma data)
-m soap PAT_JS_01 2026-06-01 2026-06-22 --long     # longitudinal (várias datas)
+# 4. SOAP
+m soap PAT_JS_01 2026-06-22                        # trajetorial (uma data)
+m soap PAT_JS_01 2026-06-01 2026-06-22 --long      # longitudinal (várias datas)
 
-# Selecionar outro modelo (override do default Opus 4.8) e reprocessar:
+# Override de modelo + reprocessamento forçado
 m asl PAT_JS_01 2026-06-22 --model grok --force
 ```
 
-> Os nomes exatos dos subcomandos seguem o `m_engine/cli.py`; o fluxo acima
-> reflete o contrato dos stages.
-
 ---
 
-## Execução via Docker / Compose
+## Deploy
 
-Os artefatos de deploy ficam em `deploy/`.
+### Docker Compose
 
 ```bash
-# Pré-requisitos: .env preenchido e um diretório de dados no host.
-cp .env.example .env            # preencha as chaves
-export M_BASE=/srv/m-engine/data   # volume de PHI (idealmente cifrado, ver abaixo)
+cp .env.example .env
+export M_BASE=/srv/m-engine/data   # volume PHI (cifrado)
 
 docker compose -f deploy/docker-compose.yml up -d --build
 ```
 
-Sobe três serviços: `redis`, `api` (uvicorn em `:8000`) e `worker` (Celery).
-API e worker compartilham o **mesmo** volume `$M_BASE` montado em
-`/var/lib/m-engine`, e ambos leem o `.env`.
+Sobe `redis`, `api` (uvicorn `:8000`) e `worker` (Celery). API e worker compartilham o volume `$M_BASE` em `/var/lib/m-engine`.
 
-Imagem isolada (base `python:3.11-slim`, usuário não-root): ver `deploy/Dockerfile`.
-O `CMD` padrão sobe a API; o worker sobrescreve o comando com
-`celery -A m_engine.tasks worker`.
+```mermaid
+flowchart LR
+    subgraph docker["docker compose"]
+        redis[(Redis)]
+        api["api\nuvicorn :8000"]
+        worker["worker\nCelery"]
+    end
+    api -->|broker| redis
+    worker -->|broker| redis
+    api  -->|volume| vol[("/var/lib/m-engine\n= $M_BASE")]
+    worker -->|volume| vol
+```
 
----
+### systemd (VM de produção)
 
-## Execução via systemd (VM de produção)
-
-Unidades em `deploy/systemd/`. Ambas usam usuário dedicado `mengine`,
-`EnvironmentFile=/etc/m-engine.env`, `WorkingDirectory=/opt/m-engine` e
-`Restart=always`.
+Unidades em `deploy/systemd/`. Usuário dedicado `mengine`, `EnvironmentFile=/etc/m-engine.env`, `Restart=always`.
 
 ```bash
-# Usuário e diretório dedicados
 sudo useradd --system --home /opt/m-engine --shell /usr/sbin/nologin mengine
 sudo mkdir -p /opt/m-engine && sudo chown mengine:mengine /opt/m-engine
 
-# venv + instalação
 sudo -u mengine python3.11 -m venv /opt/m-engine/venv
 sudo -u mengine /opt/m-engine/venv/bin/pip install /caminho/do/projeto
 
-# Segredos: arquivo de ambiente com permissão restrita (0600), fora do git
 sudo install -m 0600 -o mengine -g mengine .env /etc/m-engine.env
 
-# Instalar e habilitar as unidades
-sudo cp deploy/systemd/m-engine-api.service /etc/systemd/system/
-sudo cp deploy/systemd/m-engine-worker.service /etc/systemd/system/
+sudo cp deploy/systemd/m-engine-{api,worker}.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now m-engine-api m-engine-worker
 ```
 
-Logs: `journalctl -u m-engine-api -f` e `journalctl -u m-engine-worker -f`.
+Logs: `journalctl -u m-engine-api -f` · `journalctl -u m-engine-worker -f`
 
 ---
 
-## Segurança e PHI
+## Segurança & PHI
 
-Os dados sob `$M_BASE/pat` são **PHI**. Trate o sistema como ambiente clínico.
+<div align="center">
+  <img src="assets/m-icon.jpg" alt="M icon" width="80" />
+  <br/><sub>dados sob <code>$M_BASE/pat</code> são PHI — trate como ambiente clínico</sub>
+</div>
 
-- **Criptografia em repouso do volume.** O volume que contém `$M_BASE` deve ser
-  cifrado no disco (ex.: LUKS/dm-crypt na VM, ou um volume gerenciado com
-  *encryption at rest* habilitado). Backups do volume também devem ser cifrados.
-- **Segredos só em env / secret manager.** Chaves de API nunca no código nem em
-  imagem: vêm do `.env` (Docker) ou de `/etc/m-engine.env` (systemd, modo `0600`,
-  dono `mengine`). Em produção, prefira um *secret manager* injetando o
-  `EnvironmentFile`/variáveis em runtime. O `.env` está no `.gitignore` — não comitar.
-- **Controle de acesso na API.** A API não deve ser exposta diretamente à internet:
-  coloque-a atrás de um reverse proxy com TLS e autenticação, restrinja por rede/VPN,
-  e limite a porta `8000` à rede interna. O Redis nunca deve ser exposto publicamente
-  (no compose ele fica apenas na rede interna, sem porta publicada).
-- **Privilégio mínimo.** Containers e serviços rodam como usuário não-root
-  (`mengine`). As unidades systemd aplicam *hardening* (`ProtectSystem=strict`,
-  `NoNewPrivileges`, `PrivateTmp`, `ReadWritePaths` restrito ao volume de dados,
-  `UMask=0077`).
-- **Retenção e anonimização.** Defina política de retenção dos dossiês e remova
-  artefatos vencidos. O `PATIENT_ID` (`PAT_<INICIAIS>_<NN>`) já reduz exposição do
-  nome nos nomes de arquivo; para uso secundário (pesquisa, métricas), exporte
-  apenas dados anonimizados/agregados, sem identificadores diretos.
-- **Logs e debug.** O `extract_json` pode gravar payloads malformados em
-  `$M_BASE/_debug` para diagnóstico — esse diretório fica dentro do volume cifrado
-  e deve ser limpo periodicamente, pois pode conter conteúdo clínico.
+<br/>
+
+- **Criptografia em repouso.** Volume `$M_BASE` cifrado no disco (LUKS/dm-crypt ou volume gerenciado com *encryption at rest*). Backups também cifrados.
+- **Segredos só em env / secret manager.** Chaves nunca no código ou na imagem. `.env` está no `.gitignore`. Em produção, prefira um secret manager injetando o `EnvironmentFile` em runtime.
+- **API não exposta à internet.** Reverse proxy com TLS + autenticação; restringir `:8000` à rede interna. Redis sem porta pública.
+- **Privilégio mínimo.** Containers e serviços rodam como `mengine` (não-root). Systemd com `ProtectSystem=strict`, `NoNewPrivileges`, `PrivateTmp`, `UMask=0077`.
+- **Retenção e anonimização.** Defina política de retenção dos dossiês. `PATIENT_ID = PAT_<INICIAIS>_<NN>` reduz exposição do nome; para uso secundário exporte apenas dados anonimizados.
+- **Logs de debug.** `extract_json` pode gravar payloads malformados em `$M_BASE/_debug` — limpar periodicamente, pois pode conter conteúdo clínico.
+
+---
+
+<div align="center">
+  <img src="assets/m-hero-sm.jpg" alt="M — mental space manifold" width="360" />
+  <br/><br/>
+  <sub><em>mental space manifold</em> · M-Engine © 2026</sub>
+</div>
