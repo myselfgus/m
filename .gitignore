@@ -10,3 +10,6 @@ pat/
 audio/
 debug_*.json
 .DS_Store
+# imagens originais com nome UUID (cópias semânticas em assets/)
+[0-9A-F][0-9A-F][0-9A-F][0-9A-F][0-9A-F][0-9A-F][0-9A-F][0-9A-F]-*.PNG
+[0-9A-F][0-9A-F][0-9A-F][0-9A-F][0-9A-F][0-9A-F][0-9A-F][0-9A-F]-*.jpg

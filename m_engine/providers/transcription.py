@@ -41,10 +41,11 @@ def _format_diarized(words: list) -> str:
         text = getattr(w, "text", None) or (w.get("text") if isinstance(w, dict) else "") or ""
         if speaker and speaker != current:
             current = speaker
+            # speaker_id em formato inesperado é ERRO (não colapsar tudo em [Falante 1]).
             try:
                 n = int(str(speaker).split("_")[1]) + 1
-            except (IndexError, ValueError):
-                n = 1
+            except (IndexError, ValueError) as exc:
+                raise ValueError(f"speaker_id em formato inesperado na diarização: {speaker!r}") from exc
             out.append(f"\n\n[Falante {n}] ")
         out.append(text)
     return "".join(out).strip()
@@ -73,7 +74,10 @@ def transcribe(audio_path: str | Path, *, diarize: bool = True) -> Transcription
         )
 
     words = getattr(result, "words", None)
-    text = _format_diarized(words) if (diarize and words) else getattr(result, "text", "")
+    text = _format_diarized(words) if (diarize and words) else (getattr(result, "text", "") or "")
+    # Transcrição vazia NÃO é sucesso — STT falho/silencioso deve falhar alto.
+    if not text.strip():
+        raise RuntimeError(f"ElevenLabs Scribe retornou transcrição vazia para {audio_path.name}.")
     return TranscriptionResult(
         text=text,
         language_code=getattr(result, "language_code", LANGUAGE_CODE) or LANGUAGE_CODE,
