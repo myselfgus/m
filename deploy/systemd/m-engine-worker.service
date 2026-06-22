@@ -1,0 +1,46 @@
+# M-Engine — worker Celery como serviço systemd.
+#
+# Pré-requisitos: mesmo usuário/venv/EnvironmentFile da API (ver m-engine-api.service)
+# e um Redis acessível via REDIS_URL.
+#
+# Instalação:
+#   sudo cp deploy/systemd/m-engine-worker.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now m-engine-worker
+
+[Unit]
+Description=M-Engine Worker (Celery)
+After=network-online.target redis-server.service
+Wants=network-online.target
+Requires=redis-server.service
+
+[Service]
+Type=simple
+User=mengine
+Group=mengine
+
+# Mesmas variáveis da API (chaves de provider, REDIS_URL, M_BASE).
+EnvironmentFile=/etc/m-engine.env
+
+WorkingDirectory=/opt/m-engine
+ExecStart=/opt/m-engine/venv/bin/celery -A m_engine.tasks worker --loglevel=info --concurrency=2
+
+Restart=always
+RestartSec=3
+# Encerramento gracioso: deixa a task em andamento terminar antes do SIGKILL.
+TimeoutStopSec=60
+KillSignal=SIGTERM
+
+# --- Hardening (PHI) ---
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/m-engine
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

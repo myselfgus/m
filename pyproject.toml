@@ -1,0 +1,34 @@
+[project]
+name = "m-engine"
+version = "0.1.0"
+description = "M-Engine — pipeline clínico-linguístico (transcrição → ASL → dimensional → GEM → SOAP)"
+requires-python = ">=3.11"
+dependencies = [
+    "anthropic>=0.40",
+    "openai>=1.50",          # SDK OpenAI-compat usado para xAI (Grok) e DeepSeek
+    "elevenlabs>=1.0",       # transcrição (Scribe)
+    "pydantic>=2.7",
+    "pydantic-settings>=2.3",
+    "tenacity>=8.3",         # retry/backoff
+    "typer>=0.12",           # CLI
+    "fastapi>=0.111",        # API
+    "uvicorn[standard]>=0.30",
+    "celery>=5.4",           # fila de jobs longos
+    "redis>=5.0",
+    "python-dotenv>=1.0",
+    "structlog>=24.1",       # logging estruturado
+]
+
+[project.scripts]
+m = "m_engine.cli:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["m_engine"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"

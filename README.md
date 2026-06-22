@@ -47,10 +47,44 @@ gerado em `m_engine/store.py`.
 - **`m_engine/providers/`** — `llm.py` (chamadas diretas + extração de JSON) e
   `transcription.py` (ElevenLabs).
 
+### Fluxo do pipeline
+
+```mermaid
+flowchart LR
+    A[áudio] --> T[transcribe]
+    T --> N[normalize]
+    N --> ASL[asl]
+    ASL --> D[dimensional]
+    D --> G[gem]
+    G --> NR[narrative]
+    G --> ST[soap_trajetorial]
+    G --> SL[soap_longitudinal]
+    NR --> OUT[($M_BASE/pat/&lt;PID&gt;/)]
+    ST --> OUT
+    SL --> OUT
 ```
-áudio ──> transcribe ──> normalize ──> asl ──> dimensional ──> gem ──> narrative
-                                                                  └──> soap_*
-        (CLI `m` | API FastAPI | worker Celery)  ──>  $M_BASE/pat/<PID>/
+
+### Componentes e fluxo de execução
+
+```mermaid
+flowchart TB
+    subgraph entrypoints[Entradas]
+        CLI["CLI m (Typer)"]
+        API["API (FastAPI)"]
+    end
+    API -->|enfileira jobs longos| Q[(Redis broker)]
+    Q --> W["Worker (Celery)"]
+    CLI --> STAGES
+    API --> STAGES
+    W --> STAGES
+    subgraph STAGES[Stages]
+        direction LR
+        S1[transcribe] --> S2[normalize] --> S3[asl] --> S4[dimensional] --> S5[gem] --> S6[narrative / soap_*]
+    end
+    STAGES --> CFG[config.py / store.py]
+    STAGES --> PROV["providers (Anthropic / xAI / DeepSeek / ElevenLabs)"]
+    CFG --> FS[($M_BASE/pat — PHI)]
+    STAGES --> FS
 ```
 
 ---
@@ -204,4 +238,3 @@ Os dados sob `$M_BASE/pat` são **PHI**. Trate o sistema como ambiente clínico.
 - **Logs e debug.** O `extract_json` pode gravar payloads malformados em
   `$M_BASE/_debug` para diagnóstico — esse diretório fica dentro do volume cifrado
   e deve ser limpo periodicamente, pois pode conter conteúdo clínico.
-# m
