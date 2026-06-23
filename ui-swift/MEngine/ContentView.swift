@@ -164,11 +164,18 @@ struct SettingsView: View {
                 .tint(HOS.blue)
                 .disabled(checking)
                 if checking { ProgressView().controlSize(.small) }
-                if let healthMessage {
-                    StatusPill(text: healthMessage,
+                if healthMessage != nil {
+                    StatusPill(text: healthOK ? "OK" : "Falhou",
                                color: healthOK ? HOS.complete : HOS.error,
                                systemImage: healthOK ? "checkmark.circle.fill" : "xmark.circle.fill")
                 }
+            }
+            if let healthMessage {
+                Text(healthMessage)
+                    .font(.hosFootnote)
+                    .foregroundStyle(healthOK ? .secondary : HOS.error)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             Spacer()
@@ -190,7 +197,9 @@ struct SettingsView: View {
             healthMessage = "OK · \(h["m_base"] ?? "online")"
         } catch {
             healthOK = false
-            healthMessage = "Falhou"
+            let ns = error as NSError
+            healthMessage = "[\(ns.domain) \(ns.code)] \(ns.localizedDescription)"
+            NSLog("MENGINE healthcheck FAILED: %@", "\(error)")
         }
     }
 }

@@ -24,7 +24,10 @@
   <string>Gravação de áudio das sessões clínicas para transcrição.</string>
   <key>NSAppTransportSecurity</key>
   <dict>
-    <key>NSAllowsLocalNetworking</key>
+    <!-- HTTP texto-puro p/ a API na tailnet (rede privada). IMPORTANTE: NÃO incluir
+         NSAllowsLocalNetworking aqui — sua presença faz o macOS 10.12+ IGNORAR
+         NSAllowsArbitraryLoads, reativando o ATS (erro -1022). -->
+    <key>NSAllowsArbitraryLoads</key>
     <true/>
   </dict>
 </dict>
