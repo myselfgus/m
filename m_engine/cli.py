@@ -92,6 +92,12 @@ def birp(
     ),
     model: Optional[str] = ModelOpt,
     force: bool = ForceOpt,
+    patient_id: Optional[str] = typer.Option(
+        None, "--patient-id", help="Força o dossiê de destino (ex.: PAT_CADO_01) — útil em imports."
+    ),
+    date: Optional[str] = typer.Option(
+        None, "--date", help="Força a data da nota (YYYY-MM-DD) — útil em imports (data real da consulta)."
+    ),
 ) -> None:
     """Roda o BIRP sobre uma transcrição (ou todas as transcrições) e atualiza o info.json."""
     from m_engine.stages import birp as stage  # import lazy
@@ -102,7 +108,10 @@ def birp(
         for tj in sorted(transcriptions_dir.glob("*_transcription.json")):
             _echo_path(stage.run(tj, model=model, force=force))
     else:
-        _echo_path(stage.run(transcription_json, model=model, force=force))
+        _echo_path(stage.run(
+            transcription_json, model=model, force=force,
+            patient_id_override=patient_id, date_override=date,
+        ))
 
 
 # ---------------------------------------------------------------------------

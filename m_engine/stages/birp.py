@@ -195,7 +195,7 @@ def _assemble_markdown(note: BirpNote, *, date: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def run(transcription_json_path: str | Path, *, model: str | None = None, force: bool = False) -> Path:
+def run(transcription_json_path: str | Path, *, model: str | None = None, force: bool = False, patient_id_override: str | None = None, date_override: str | None = None) -> Path:
     """
     Gera a nota BIRP a partir da transcrição bruta e cria/atualiza o dossiê.
 
@@ -213,7 +213,8 @@ def run(transcription_json_path: str | Path, *, model: str | None = None, force:
         raise FileNotFoundError(f"Transcrição não encontrada: {src_path}")
 
     text = _load_transcription(src_path)
-    date = today()
+    # date_override: usado em imports (data real da consulta, não o dia de processamento).
+    date = date_override or today()
 
     # --- GATE DE IDEMPOTÊNCIA (identificação LEVE antes do LLM) ---
     # Resolve um patient_id candidato de forma barata para checar BIRP anterior.
@@ -242,7 +243,9 @@ def run(transcription_json_path: str | Path, *, model: str | None = None, force:
 
     # --- RESOLUÇÃO DO DOSSIÊ (idempotente pelo nome canônico do LLM) ---
     patient_name = (note.patient_name or "Paciente").strip() or "Paciente"
-    patient_id = find_existing_patient(patient_name) or generate_patient_id(patient_name)
+    # patient_id_override: força o dossiê de destino (imports onde o ID já é conhecido,
+    # evitando que a derivação do nome pelo LLM crie um PID divergente/duplicado).
+    patient_id = patient_id_override or find_existing_patient(patient_name) or generate_patient_id(patient_name)
     ensure_dossier(patient_id)
 
     # Iniciais: usa a do LLM se houver; senão deriva do nome.
