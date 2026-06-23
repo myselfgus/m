@@ -42,6 +42,11 @@ MAX_TOKENS_PER_CHUNK = 15_000
 ANALYSIS_VERSION = "1.0-dimensional"
 
 
+def prewarm_blocks() -> list[list[SystemBlock]]:
+    """System prompt(s) deste stage para pré-aquecer o cache (mesma chave do run)."""
+    return [_system_blocks()]
+
+
 # ---------------------------------------------------------------------------
 # Extração da fala do paciente
 # ---------------------------------------------------------------------------

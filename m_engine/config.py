@@ -92,6 +92,10 @@ class Settings(BaseSettings):
     # PATH pode não ter ~/.local/bin — aponte o caminho absoluto via M_CLAUDE_CLI_BIN.
     m_claude_cli_bin: str = "claude"
 
+    # TTL do prompt caching (cache_control ephemeral). "5m" ou "1h". Default 1h:
+    # janelas de lote clínico reusam os system prompts gigantes por mais tempo.
+    m_cache_ttl: str = "1h"
+
     # ----- Paths derivados -----
     @property
     def pat_dir(self) -> Path:

@@ -49,6 +49,15 @@ def _echo_path(path: Path) -> None:
     typer.echo(str(path))
 
 
+@app.command()
+def warm() -> None:
+    """Pré-aquece o prompt cache dos system prompts grandes (asl/dimensional/gem/birp)."""
+    from m_engine.prewarm import warm_all  # import lazy
+
+    writes = warm_all()
+    typer.echo(f"cache pré-aquecido: {writes} escrita(s)")
+
+
 # ---------------------------------------------------------------------------
 # Stage 0 — Transcrição
 # ---------------------------------------------------------------------------

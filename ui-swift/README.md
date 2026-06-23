@@ -32,9 +32,17 @@ e **lê** as notas clínicas (BIRP/SOAP) renderizadas em Markdown.
    `AVAudioApplication.requestRecordPermission`).
 3. Apague o `ContentView.swift`/`<Nome>App.swift` gerados e **arraste todos os `.swift` de `MEngine/`**
    para o target (marque "Copy items if needed" e o target do app).
-4. Configure as permissões/segurança abaixo.
-5. Build & Run. Em **Ajustes** (engrenagem), aponte a **URL da API** (ex.: `http://localhost:8000`)
+4. **Ícone do app:** use o asset da marca `m-icon` (`../assets/m-icon.jpg`). No Xcode, abra
+   `Assets.xcassets → AppIcon` e arraste o `m-icon` (ou as variantes geradas). Já há um
+   `MEngine/AppIcon.icns` (gerado do `m-icon`, 443×443) usado pelo build SwiftPM/macOS
+   (referenciado em `Info.plist` via `CFBundleIconFile = AppIcon`).
+5. Configure as permissões/segurança abaixo.
+6. Build & Run. Em **Ajustes** (engrenagem), aponte a **URL da API** (ex.: `http://localhost:8000`)
    e use "Testar conexão".
+
+> **macOS via SwiftPM** (`swift build`): o `M-Engine.app` montado já embute o ícone em
+> `Contents/Resources/AppIcon.icns`. O `.app` e o `.build/` não vão ao git (ver `.gitignore`);
+> o que é versionado é o `AppIcon.icns` em `MEngine/`.
 
 ## Permissões e segurança (obrigatório para funcionar)
 

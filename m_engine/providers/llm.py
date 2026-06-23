@@ -164,17 +164,22 @@ def complete(
     return _complete_openai_compat(spec, blocks, user, out_tokens, temperature, timeout, max_continuations)
 
 
+def _system_param(blocks, cache: bool) -> list[dict]:
+    """Monta o array `system` com cache_control (TTL configurável) nos blocos cacheáveis."""
+    ttl = get_settings().m_cache_ttl
+    out: list[dict] = []
+    for b in blocks:
+        if cache and b.cache:
+            out.append({"type": "text", "text": b.text, "cache_control": {"type": "ephemeral", "ttl": ttl}})
+        else:
+            out.append({"type": "text", "text": b.text})
+    return out
+
+
 @_retry
 def _complete_anthropic(spec, blocks, user, max_tokens, temperature, cache, timeout, max_cont) -> CompletionResult:
     client = _anthropic()
-    system_param = [
-        (
-            {"type": "text", "text": b.text, "cache_control": {"type": "ephemeral"}}
-            if (cache and b.cache)
-            else {"type": "text", "text": b.text}
-        )
-        for b in blocks
-    ]
+    system_param = _system_param(blocks, cache)
     messages = [{"role": "user", "content": user}]
     content, usage, cont = "", Usage(), 0
 
@@ -213,7 +218,44 @@ def _complete_anthropic(spec, blocks, user, max_tokens, temperature, cache, time
             continue
         break
 
+    # Instrumentação de cache: confirma acertos (read>0) e custo de escrita (write>0).
+    log.info(
+        "anthropic_usage",
+        model=spec.id,
+        input=usage.input,
+        output=usage.output,
+        cache_read=usage.cache_read,
+        cache_write=usage.cache_write,
+        cache_hit=usage.cache_read > 0,
+    )
     return CompletionResult(content, usage, spec.id, spec.provider, cont)
+
+
+def prewarm(blocks: list[SystemBlock], model: str | None = None, timeout: float = 120.0) -> bool:
+    """
+    Pré-aquece o cache do prompt de SISTEMA (max_tokens:0, sem stream/thinking).
+    Escreve o cache_control no prefixo system para que a 1ª chamada real leia a 0.1x.
+    Só faz sentido para o provider anthropic. Retorna True se houve cache_write.
+    """
+    spec = resolve_model(model)
+    if spec.provider != "anthropic":
+        return False
+    client = _anthropic()
+    resp = client.messages.create(
+        model=spec.id,
+        max_tokens=0,  # não gera saída; só escreve o cache (thinking/stream proibidos aqui)
+        system=_system_param(blocks, cache=True),
+        messages=[{"role": "user", "content": "warmup"}],
+    )
+    u = resp.usage
+    wrote = (getattr(u, "cache_creation_input_tokens", 0) or 0) > 0
+    log.info(
+        "prewarm",
+        model=spec.id,
+        cache_write=getattr(u, "cache_creation_input_tokens", 0) or 0,
+        cache_read=getattr(u, "cache_read_input_tokens", 0) or 0,
+    )
+    return wrote
 
 
 @_retry

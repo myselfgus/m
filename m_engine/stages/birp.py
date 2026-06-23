@@ -59,6 +59,12 @@ from m_engine.util import estimate_tokens, load_prompt, now_iso, split_into_chun
 
 log = structlog.get_logger("m_engine.birp")
 
+
+def prewarm_blocks() -> list[list[SystemBlock]]:
+    """System prompt(s) deste stage para pré-aquecer o cache (mesma chave do run)."""
+    return [[SystemBlock(text=load_prompt("birp"), cache=True)]]
+
+
 # Acima deste tamanho (tokens estimados) a transcrição é dividida em blocos e
 # consolidada numa única chamada (concatenamos os blocos rotulados no user prompt).
 _CHUNK_THRESHOLD_TOKENS = 15_000

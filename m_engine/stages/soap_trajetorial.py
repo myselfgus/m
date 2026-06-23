@@ -83,6 +83,12 @@ def _split_system_prompts() -> tuple[str, str]:
     return clinico.strip(), plano.strip()
 
 
+def prewarm_blocks() -> list[list["llm.SystemBlock"]]:
+    """System prompts (clínico e plano) deste stage para pré-aquecer o cache."""
+    clinico, plano = _split_system_prompts()
+    return [[llm.SystemBlock(text=clinico, cache=True)], [llm.SystemBlock(text=plano, cache=True)]]
+
+
 def _timestamp() -> str:
     """Timestamp do arquivo no padrão do legado: ISO sem ':'/'.' até os segundos."""
     return datetime.now(timezone.utc).isoformat().replace(":", "-").replace(".", "-")[:19]
@@ -94,9 +100,9 @@ def _timestamp() -> str:
 
 
 def _generate_clinical_analysis(
-    asl: dict, vdlp: dict, gem: dict | None, patient_info: dict, *, model: str | None
+    asl: dict, vdlp: dict, gem: dict | None, patient_info: dict, transcript: str, *, model: str | None
 ) -> str:
-    """Gera as seções S+O+A. Antes: Claude Sonnet. Agora: modelo default (Opus 4.8)."""
+    """Gera as seções S, O, A (narrativa-fenomenológica + EEM a partir da transcrição)."""
     system, _ = _split_system_prompts()
 
     asl_block = _truncate(_dump(asl), _TRUNC_ASL)
@@ -112,15 +118,15 @@ Nome: {patient_info.get("nome") or patient_info.get("patient_name") or "Não inf
 Idade: {patient_info.get("idade") or "Não informada"}
 Prontuário: {patient_info.get("prontuario") or "_____________________"}
 
-# ANÁLISE SISTÊMICA LINGUÍSTICA (ASL)
+# TRANSCRIÇÃO DA CONSULTA (diálogo completo — médico e paciente)
 
-**IMPORTANTE**: A transcrição completa do paciente está em ASL.linguistic_analysis.transcricao_filtrada.fala_falante_completa
+{transcript}
+
+# ANÁLISE SISTÊMICA LINGUÍSTICA (ASL) — fala do paciente
 
 {asl_block}
 
 # 15 DIMENSÕES DO ESPAÇO MENTAL (VDLP)
-
-**IMPORTANTE**: Cada dimensão já contém evidencias_textuais (citações literais) e calculo_explicito
 
 {vdlp_block}
 
@@ -128,15 +134,12 @@ Prontuário: {patient_info.get("prontuario") or "_____________________"}
 
 ---
 
-Gere as seções S, O, A do SOAP Trajetorial em formato Markdown, seguindo rigorosamente as diretrizes fornecidas.
-
-**LEMBRE-SE**:
-- Para citações literais do paciente: USE ASL.linguistic_analysis.transcricao_filtrada ou exemplos das análises
-- Para métricas objetivas: USE ASL.metricas_quantitativas e scores do VDLP
-- NÃO precisa da transcrição separada - está tudo dentro do ASL e VDLP"""
+Redija as seções **S, O, A** do SOAP em Markdown, seguindo rigorosamente as diretrizes do system.
+Use a TRANSCRIÇÃO para a narrativa fenomenológica e o Exame do Estado Mental; ASL/VDLP/GEM
+sustentam os achados (citações literais e métricas). Não invente dados."""
 
     log.info("clinical_analysis", model=model or "default")
-    res = llm.complete(system=system, user=user, model=model, temperature=0.3)
+    res = llm.complete(system=[llm.SystemBlock(text=system, cache=True)], user=user, model=model, temperature=0.3)
     return res.content.strip()
 
 
@@ -146,10 +149,11 @@ def _generate_therapeutic_plan(
     vdlp: dict,
     gem: dict | None,
     patient_info: dict,
+    transcript: str,
     *,
     model: str | None,
 ) -> str:
-    """Gera as seções P+A. Antes: Grok-4. Agora: modelo default (Opus 4.8)."""
+    """Gera a seção P (conduta), incluindo a conduta que o MÉDICO indicou na sessão."""
     _, system = _split_system_prompts()
 
     # Recortes-chave do legado (navegação defensiva — ASL/VDLP são dicts livres).
@@ -171,6 +175,14 @@ def _generate_therapeutic_plan(
 
 {clinical_analysis}
 
+# TRANSCRIÇÃO DA CONSULTA (diálogo completo — médico e paciente)
+
+**IMPORTANTE**: extraia da fala do MÉDICO a conduta que ele indicou durante a sessão
+(medicamentos prescritos/suspensos, doses, exames, encaminhamentos, orientações, retorno)
+e torne-a EXPLÍCITA na seção P. A conduta documentada deve refletir o que o médico disse.
+
+{transcript}
+
 # DADOS DIMENSIONAIS (Referência)
 
 **ASL - Métricas Linguísticas Chave**:
@@ -188,10 +200,12 @@ Idade: {patient_info.get("idade") or "Não informada"}
 
 ---
 
-Gere as seções P e A do SOAP Trajetorial em formato Markdown, seguindo rigorosamente as diretrizes fornecidas."""
+Redija a seção **P (Conduta)** do SOAP em Markdown, seguindo as diretrizes do system.
+Priorize a conduta efetivamente indicada pelo médico na sessão; complemente com o plano
+fundamentado em ASL/VDLP/GEM sem contradizê-la."""
 
     log.info("therapeutic_plan", model=model or "default")
-    res = llm.complete(system=system, user=user, model=model, temperature=0.4)
+    res = llm.complete(system=[llm.SystemBlock(text=system, cache=True)], user=user, model=model, temperature=0.4)
     return res.content.strip()
 
 
@@ -218,20 +232,11 @@ def _assemble_document(
     prof_nome = professional_info.get("nome") or "Profissional não configurado"
     prof_registro = professional_info.get("registro") or "Registro não configurado"
 
-    return f"""# SOAP TRAJETORIAL
+    return f"""# SOAP — Sumário
 
-**Centro de Atenção Psicossocial - CAPS**
-*Rua Joaquim Miranda, 298 - Guarulhos - SP*
-**Documentação Clínica Multidimensional**
-
----
-
-**Nome:** {nome}
-**Idade:** {idade}
-**Prontuário:** {prontuario}
-**Data:** {session_date or date_str}
-**Tipo Sessão:** Consulta Psiquiátrica - Primeira Consulta
-**Profissional:** {prof_nome}
+**Paciente:** {nome}  ·  **Idade:** {idade}  ·  **Prontuário:** {prontuario}
+**Data da consulta:** {session_date or date_str}  ·  **Tipo:** Primeira consulta psiquiátrica
+**Profissional:** {prof_nome}{f" — {prof_registro}" if prof_registro and prof_registro != "Registro não configurado" else ""}
 
 ---
 
@@ -243,18 +248,7 @@ def _assemble_document(
 
 ---
 
-**{prof_nome}**
-*{prof_registro}*
-
-**Data:** {date_str} - {time_str}
-**Próxima consulta:** Conforme plano terapêutico
-
----
-
-*Metodologia VOITHER v2.0*
-*Framework desenvolvido por Gustavo Mendes e Silva | voither.com*
-*"Honrando a complexidade humana através da análise multidimensional"*
-*© 2025 VOITHER. Todos os direitos reservados.*"""
+© 2026 IREAJE"""
 
 
 # ---------------------------------------------------------------------------
@@ -299,6 +293,13 @@ def run(patient_id: str, date: str, *, model: str | None = None, force: bool = F
     asl = read_json(apath)
     vdlp = read_json(vpath)
 
+    # Transcrição COMPLETA (diálogo médico+paciente) — necessária para EEM e para
+    # extrair a conduta que o médico indicou na sessão.
+    tdata = read_json(tpath)
+    transcript = (
+        tdata.get("transcription_corrected") or tdata.get("transcricao") or tdata.get("text") or ""
+    )
+
     # GEM é opcional.
     gpath = gem_path(patient_id, date)
     gem = read_json(gpath) if gpath.exists() else None
@@ -307,11 +308,11 @@ def run(patient_id: str, date: str, *, model: str | None = None, force: bool = F
     patient_info = load_info(patient_id)
     professional_info = patient_info.get("professional") or patient_info.get("profissional") or {}
 
-    # Bloco clínico (S+O+A) — modelo default.
-    clinical_analysis = _generate_clinical_analysis(asl, vdlp, gem, patient_info, model=model)
-    # Bloco plano (P+A) — modelo default (SEM Grok).
+    # Bloco clínico (S, O, A) — narrativa-fenomenológica + EEM da transcrição.
+    clinical_analysis = _generate_clinical_analysis(asl, vdlp, gem, patient_info, transcript, model=model)
+    # Bloco plano (P) — conduta indicada pelo médico na sessão + plano fundamentado.
     therapeutic_plan = _generate_therapeutic_plan(
-        clinical_analysis, asl, vdlp, gem, patient_info, model=model
+        clinical_analysis, asl, vdlp, gem, patient_info, transcript, model=model
     )
 
     # Data da sessão: a do argumento (já é a data do encontro).

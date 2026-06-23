@@ -41,6 +41,12 @@ BATCH_SIZE = 3
 _TEXT_KEYS = ("transcription_corrected", "transcricao", "transcricao_normalizada", "text")
 
 
+def prewarm_blocks() -> list[list[SystemBlock]]:
+    """System prompt(s) deste stage para pré-aquecer o cache (mesma chave do run)."""
+    system_text, schema_text, _ = _load_prompt_sections()
+    return [[SystemBlock(text=system_text, cache=True), SystemBlock(text=schema_text, cache=True)]]
+
+
 # ---------------------------------------------------------------------------
 # Carregamento e fatiamento do prompt (system / schema / user)
 # ---------------------------------------------------------------------------

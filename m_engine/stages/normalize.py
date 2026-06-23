@@ -68,6 +68,14 @@ def _prompt_block(name: str) -> str:
     return match.group(1).strip()
 
 
+def prewarm_blocks() -> list[list[SystemBlock]]:
+    """System prompts cacheados deste stage (metadata + correction) para pré-aquecer."""
+    return [
+        [SystemBlock(_prompt_block("metadata"), cache=True)],
+        [SystemBlock(_prompt_block("correction"), cache=True)],
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Etapa: extração de metadados (extractMetadata)
 # ---------------------------------------------------------------------------

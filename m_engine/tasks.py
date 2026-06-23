@@ -14,10 +14,22 @@ Princípios:
 from __future__ import annotations
 
 from celery import Celery
+from celery.signals import worker_ready
 
 from m_engine.config import get_settings
 
 settings = get_settings()
+
+
+@worker_ready.connect
+def _prewarm_on_boot(**_kwargs) -> None:
+    """Pré-aquece o prompt cache quando o worker sobe (não-fatal se faltar chave)."""
+    try:
+        from m_engine.prewarm import warm_all
+
+        warm_all()
+    except Exception:  # noqa: BLE001 — warm é otimização; nunca derruba o worker
+        pass
 
 # App Celery: broker e backend de resultados no Redis configurado.
 celery_app = Celery(

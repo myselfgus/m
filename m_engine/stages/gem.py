@@ -51,6 +51,11 @@ CHUNK_SIZE_TOKENS = 30_000        # tamanho-alvo de cada chunk da transcrição
 ANALYSIS_VERSION = "gem-v3-emergenabilidade"
 
 
+def prewarm_blocks() -> list[list[SystemBlock]]:
+    """System prompt(s) deste stage para pré-aquecer o cache (mesma chave do run)."""
+    return [[SystemBlock(text=load_prompt("gem"), cache=True)]]
+
+
 # ---------------------------------------------------------------------------
 # Montagem do user prompt (workflow de 5 stages + Required Output Structure)
 # Portado FIEL da constante userPrompt do legado.

@@ -50,6 +50,13 @@ log = structlog.get_logger("m_engine.soap_longitudinal")
 # Delimitador que separa os DOIS system prompts em prompts/soap_longitudinal.md
 _PROMPT_DELIM = "===PLANO==="
 
+
+def prewarm_blocks() -> list[list["llm.SystemBlock"]]:
+    """System prompts (S/O/A e Plano) deste stage para pré-aquecer o cache."""
+    raw = re.sub(r"<!--.*?-->", "", load_prompt("soap_longitudinal"), flags=re.DOTALL)
+    soa, plan = (p.strip() for p in raw.split(_PROMPT_DELIM, 1))
+    return [[llm.SystemBlock(text=soa, cache=True)], [llm.SystemBlock(text=plan, cache=True)]]
+
 # Limites de truncamento dos JSONs no user prompt (espelham o legado TS)
 _MAX_ASL_CHARS = 30000
 _MAX_VDLP_CHARS = 30000
@@ -228,21 +235,11 @@ def _assemble_document(soa: str, plan: str, sessions: list[_Session], info: dict
     consultas = " → ".join(f"C{s.number}" for s in sessions)
     datas = ", ".join(s.date for s in sessions)
 
-    return f"""# SOAP LONGITUDINAL
+    return f"""# SOAP — Seguimento
 
-**Centro de Atenção Psicossocial - CAPS**
-*Rua Joaquim Miranda, 298 - Guarulhos - SP*
-**Análise Evolutiva Multidimensional VOITHER** `{session_range}`
-
----
-
-**CONSULTAS COMPARADAS:** {consultas}
-**DATAS:** {datas}
-
-**{nome}**
-
-*Idade: {idade} | {genero} | {profissional}*
-*Intervalo entre consultas: Variável | Foco: Evolução terapêutica multidimensional*
+**Paciente:** {nome}  ·  **Idade:** {idade}  ·  {genero}
+**Consultas comparadas:** {consultas}  ·  **Datas:** {datas}
+**Profissional:** {profissional}{f" — {registro}" if registro and registro != "Registro não configurado" else ""}
 
 ---
 
@@ -254,18 +251,7 @@ def _assemble_document(soa: str, plan: str, sessions: list[_Session], info: dict
 
 ---
 
-**{profissional}**
-*{registro}*
-
-**{date_str} - {time_str}**
-**Evolução registrada**
-
----
-
-*SOAP Longitudinal v1.0 - Metodologia VOITHER*
-*Framework desenvolvido por Gustavo Mendes e Silva | voither.com*
-Centro de Atenção Psicossocial - Rua Joaquim Miranda, 298 - Guarulhos - SP
-*"Honrando a complexidade humana através da análise multidimensional evolutiva"*"""
+© 2026 IREAJE"""
 
 
 def _output_path(patient_id: str, sessions: list[_Session], ts: str) -> Path:
@@ -330,18 +316,18 @@ def run(patient_id: str, dates: list[str], *, model: str | None = None, force: b
     # 1) Seções S+O+A — Claude Opus 4.8 (default)
     log.info("gerando_soa", patient=patient_id, consultas=len(sessions))
     soa = llm.complete(
-        system=system_soa,
+        system=[llm.SystemBlock(text=system_soa, cache=True)],
         user=_build_soa_user_prompt(sessions, info),
-        model=model,  # None → default (Opus 4.8); NUNCA Grok
+        model=model,  # None → default (sonnet); NUNCA Grok
         temperature=0.3,
     ).content
 
     # 2) Seção P — MESMO modelo default (★ remoção do Grok do legado)
     log.info("gerando_plano", patient=patient_id)
     plan = llm.complete(
-        system=system_plan,
+        system=[llm.SystemBlock(text=system_plan, cache=True)],
         user=_build_plan_user_prompt(soa, sessions),
-        model=model,  # None → default (Opus 4.8); NUNCA Grok
+        model=model,  # None → default (sonnet); NUNCA Grok
         temperature=0.4,
     ).content
 
