@@ -1,0 +1,221 @@
+/* HealthOS Design System — colors, type, spacing, radii, shadows, glass
+ * Product: HealthOS — sistema operacional de inteligência clínica para psiquiatria.
+ * Reality source: github.com/myselfgus/healthdrive (HDrive v2). macOS 26+ Liquid Glass.
+ * Brand: lowercase "health" (ink navy) + "OS" (blue) · connection-node mark.
+ * Type: system-first — -apple-system / ui-monospace resolve to SF Pro / SF Mono
+ * natively on Apple; Inter / JetBrains Mono are the web fallbacks elsewhere.
+ * The wordmark uses a geometric sans (Poppins web substitute for the logo lettering).
+ */
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Poppins:wght@500;600;700&display=swap');
+
+:root {
+  /* ─── Type families ──────────────────────────────────────────────────── */
+  /* System-first: -apple-system resolves to SF Pro natively on Apple platforms
+   * (Display/Text optical variants auto-selected by size); Inter is the web
+   * fallback elsewhere. No named 'SF Pro …' family, so no font upload needed. */
+  --font-display: -apple-system, BlinkMacSystemFont, system-ui, 'Inter', sans-serif;
+  --font-text:    -apple-system, BlinkMacSystemFont, system-ui, 'Inter', sans-serif;
+  --font-rounded: ui-rounded, -apple-system, BlinkMacSystemFont, system-ui, 'Inter', sans-serif;
+  --font-brand:   'Poppins', ui-rounded, -apple-system, system-ui, sans-serif; /* wordmark only */
+  --font-mono:    ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
+
+  /* ─── Type scale (macOS 26 native sizes) ─────────────────────────────── */
+  --type-largeTitle:  26px;  --type-largeTitle-lh:  32px;  --type-largeTitle-w:  700;
+  --type-title1:      22px;  --type-title1-lh:      28px;  --type-title1-w:      600;
+  --type-title2:      17px;  --type-title2-lh:      22px;  --type-title2-w:      600;
+  --type-title3:      15px;  --type-title3-lh:      20px;  --type-title3-w:      600;
+  --type-headline:    13px;  --type-headline-lh:    16px;  --type-headline-w:    600;
+  --type-body:        13px;  --type-body-lh:        18px;  --type-body-w:        400;
+  --type-callout:     12px;  --type-callout-lh:     16px;  --type-callout-w:     400;
+  --type-subhead:     11px;  --type-subhead-lh:     14px;  --type-subhead-w:     500;
+  --type-footnote:    11px;  --type-footnote-lh:    14px;  --type-footnote-w:    400;
+  --type-caption1:    10px;  --type-caption1-lh:    13px;  --type-caption1-w:    500;
+  --type-caption2:    10px;  --type-caption2-lh:    13px;  --type-caption2-w:    400;
+
+  /* ─── Foreground (label) hierarchy — system semantic ─────────────────── */
+  --fg-1:        oklch(22% 0.02 250);                                /* labelColor (ink navy) */
+  --fg-2:        color-mix(in oklch, var(--fg-1) 62%, transparent);  /* secondary */
+  --fg-3:        color-mix(in oklch, var(--fg-1) 40%, transparent);  /* tertiary */
+  --fg-4:        color-mix(in oklch, var(--fg-1) 22%, transparent);  /* quaternary */
+  --fg-link:     var(--hos-blue);
+  --fg-on-tint:  oklch(99% 0.005 250);
+
+  /* ─── Background (system surfaces) ───────────────────────────────────── */
+  --bg-window:   oklch(97.5% 0.004 250);
+  --bg-sidebar:  oklch(96% 0.005 250);
+  --bg-content:  oklch(100% 0 0);
+  --bg-recess:   oklch(94% 0.006 250);
+  --bg-divider:  color-mix(in oklch, var(--fg-1) 8%, transparent);
+
+  /* ─── HealthOS brand palette (from the logo) ─────────────────────────── */
+  --hos-ink:        #1C2533;   /* "health" wordmark — near-black navy */
+  --hos-navy:       #1C3A63;   /* icon dark half — deep navy */
+  --hos-navy-lt:    #2E5388;
+  --hos-blue:       #3B82F6;   /* "OS" + icon bright half — primary accent / system tint */
+  --hos-blue-bright:#4F8DF5;
+  --hos-blue-deep:  #1E5BC6;
+  --hos-blue-soft:  color-mix(in srgb, var(--hos-blue) 12%, transparent);
+
+  /* ─── Pipeline stage tints — STT · PROC · SPEECH · ASL · VDLP · GEM ──── */
+  --stage-stt:    #64748B;   --stage-stt-bg:    color-mix(in srgb, #64748B 13%, transparent);
+  --stage-proc:   #3B82F6;   --stage-proc-bg:   color-mix(in srgb, #3B82F6 13%, transparent);
+  --stage-speech: #0EA5B7;   --stage-speech-bg: color-mix(in srgb, #0EA5B7 13%, transparent);
+  --stage-asl:    #5B5BD6;   --stage-asl-bg:    color-mix(in srgb, #5B5BD6 13%, transparent);
+  --stage-vdlp:   #8B5CF6;   --stage-vdlp-bg:   color-mix(in srgb, #8B5CF6 13%, transparent);
+  --stage-gem:    #1FA86F;   --stage-gem-bg:    color-mix(in srgb, #1FA86F 13%, transparent);
+
+  /* ─── Stat-card tints (mirror the dashboard Home) ────────────────────── */
+  --tint-blue:    #3B82F6;
+  --tint-indigo:  #5B5BD6;
+  --tint-purple:  #8B5CF6;
+  --tint-teal:    #0EA5B7;
+
+  /* ─── Semantic state — badges, banners, capsules, stage status ───────── */
+  --state-complete: #1FA86F;  --state-complete-bg: color-mix(in srgb, #1FA86F 13%, transparent);  /* gem_complete */
+  --state-running:  #3B82F6;  --state-running-bg:  color-mix(in srgb, #3B82F6 13%, transparent);
+  --state-review:   #C2780C;  --state-review-bg:   color-mix(in srgb, #C2780C 13%, transparent);  /* needs_review */
+  --state-pending:  #64748B;  --state-pending-bg:  color-mix(in srgb, #64748B 13%, transparent);
+  --state-error:    #C2354A;  --state-error-bg:    color-mix(in srgb, #C2354A 13%, transparent);
+  --state-degraded: #C2780C;  --state-degraded-bg: color-mix(in srgb, #C2780C 13%, transparent);
+  --state-info:     #2C5BA0;  --state-info-bg:     color-mix(in srgb, #2C5BA0 13%, transparent);
+  --state-queued:   #7A8699;  --state-queued-bg:   color-mix(in srgb, #7A8699 13%, transparent);
+
+  /* ─── Spacing (8-pt rhythm) ──────────────────────────────────────────── */
+  --space-1:  4px;
+  --space-2:  8px;
+  --space-3:  12px;
+  --space-4:  16px;
+  --space-5:  20px;
+  --space-6:  24px;
+  --space-8:  32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --space-16: 64px;
+
+  /* ─── Corner radii ───────────────────────────────────────────────────── */
+  --radius-sm:   6px;
+  --radius-md:   8px;
+  --radius-lg:   12px;
+  --radius-xl:   16px;   /* glassEffect(.regular, in: .rect(cornerRadius: 16)) */
+  --radius-pill: 9999px;
+
+  /* ─── Borders ────────────────────────────────────────────────────────── */
+  --border-hairline: color-mix(in srgb, currentColor 12%, transparent);
+  --border-strong:   color-mix(in srgb, currentColor 22%, transparent);
+
+  /* ─── Shadows / elevation ────────────────────────────────────────────── */
+  --shadow-recess:    inset 0 1px 0 0 rgba(0,0,0,0.04), inset 0 0 0 0.5px rgba(0,0,0,0.06);
+  --shadow-card:      0 1px 0 0 rgba(0,0,0,0.04), 0 1px 3px 0 rgba(0,0,0,0.06);
+  --shadow-floating:  0 8px 24px -4px rgba(0,0,0,0.16), 0 2px 6px 0 rgba(0,0,0,0.08);
+  --shadow-modal:     0 24px 64px -8px rgba(0,0,0,0.24), 0 4px 12px 0 rgba(0,0,0,0.08);
+
+  /* ─── Glass / material (Liquid Glass) ────────────────────────────────── */
+  --glass-thin-bg:    rgba(255, 255, 255, 0.55);
+  --glass-regular-bg: rgba(255, 255, 255, 0.72);
+  --glass-thick-bg:   rgba(255, 255, 255, 0.86);
+  --glass-blur:       blur(20px) saturate(1.7);   /* @kind other */
+  --glass-blur-thick: blur(32px) saturate(1.9);   /* @kind other */
+  --glass-tint:       color-mix(in srgb, var(--hos-blue) 4%, transparent);
+  --glass-border:     inset 0 0 0 0.5px rgba(255, 255, 255, 0.42), inset 0 0.5px 0 0 rgba(255, 255, 255, 0.62);   /* @kind shadow */
+
+  /* ─── Motion ─────────────────────────────────────────────────────────── */
+  --ease-out:    cubic-bezier(0.25, 0.1, 0.25, 1);   /* @kind other */
+  --ease-inout:  cubic-bezier(0.4, 0, 0.6, 1);       /* @kind other */
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);  /* @kind other */
+  --dur-quick:   120ms;   /* @kind other */
+  --dur-base:    200ms;   /* @kind other */
+  --dur-glass:   320ms;   /* @kind other */
+
+  /* ─── Focus ──────────────────────────────────────────────────────────── */
+  --focus-ring: 0 0 0 1px var(--bg-window), 0 0 0 3px color-mix(in srgb, var(--hos-blue) 70%, transparent);
+}
+
+/* ─── Dark scheme (system-adaptive) ────────────────────────────────────── */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --fg-1:       oklch(96% 0.005 250);
+    --bg-window:  oklch(16% 0.01 255);
+    --bg-sidebar: oklch(13% 0.01 255);
+    --bg-content: oklch(20% 0.01 255);
+    --bg-recess:  oklch(11% 0.01 255);
+
+    --hos-ink:    #E8ECF3;
+    --hos-navy-lt:#5C81B5;
+
+    --glass-thin-bg:    rgba(28, 30, 36, 0.55);
+    --glass-regular-bg: rgba(28, 30, 36, 0.72);
+    --glass-thick-bg:   rgba(28, 30, 36, 0.86);
+    --glass-border:     inset 0 0 0 0.5px rgba(255, 255, 255, 0.08), inset 0 0.5px 0 0 rgba(255, 255, 255, 0.12);   /* @kind shadow */
+  }
+}
+
+/* ─── Semantic typography classes ──────────────────────────────────────── */
+.t-largeTitle { font: var(--type-largeTitle-w) var(--type-largeTitle)/var(--type-largeTitle-lh) var(--font-display); letter-spacing: -0.022em; }
+.t-title1     { font: var(--type-title1-w)     var(--type-title1)/var(--type-title1-lh)         var(--font-display); letter-spacing: -0.018em; }
+.t-title2     { font: var(--type-title2-w)     var(--type-title2)/var(--type-title2-lh)         var(--font-display); letter-spacing: -0.014em; }
+.t-title3     { font: var(--type-title3-w)     var(--type-title3)/var(--type-title3-lh)         var(--font-text);    letter-spacing: -0.010em; }
+.t-headline   { font: var(--type-headline-w)   var(--type-headline)/var(--type-headline-lh)     var(--font-text);    letter-spacing: -0.005em; }
+.t-body       { font: var(--type-body-w)       var(--type-body)/var(--type-body-lh)             var(--font-text); }
+.t-callout    { font: var(--type-callout-w)    var(--type-callout)/var(--type-callout-lh)       var(--font-text); }
+.t-subhead    { font: var(--type-subhead-w)    var(--type-subhead)/var(--type-subhead-lh)       var(--font-text);    text-transform: uppercase; letter-spacing: 0.06em; }
+.t-footnote   { font: var(--type-footnote-w)   var(--type-footnote)/var(--type-footnote-lh)     var(--font-text); }
+.t-caption1   { font: var(--type-caption1-w)   var(--type-caption1)/var(--type-caption1-lh)     var(--font-text); }
+.t-caption2   { font: var(--type-caption2-w)   var(--type-caption2)/var(--type-caption2-lh)     var(--font-text); }
+.t-mono       { font-family: var(--font-mono); font-size: 12px; line-height: 16px; }
+
+/* ─── Glass surfaces ───────────────────────────────────────────────────── */
+.glass-thin {
+  background: var(--glass-thin-bg);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  box-shadow: var(--glass-border), var(--shadow-card);
+}
+.glass-regular {
+  background: var(--glass-regular-bg);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  box-shadow: var(--glass-border), var(--shadow-card);
+}
+.glass-thick {
+  background: var(--glass-thick-bg);
+  backdrop-filter: var(--glass-blur-thick);
+  -webkit-backdrop-filter: var(--glass-blur-thick);
+  box-shadow: var(--glass-border), var(--shadow-floating);
+}
+
+/* ─── Capsule / status pill ────────────────────────────────────────────── */
+.capsule {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px;
+  border-radius: var(--radius-pill);
+  font: 600 11px/14px var(--font-text);
+  letter-spacing: 0.01em;
+}
+.capsule[data-state="complete"] { color: var(--state-complete); background: var(--state-complete-bg); }
+.capsule[data-state="running"]  { color: var(--state-running);  background: var(--state-running-bg); }
+.capsule[data-state="review"]   { color: var(--state-review);   background: var(--state-review-bg); }
+.capsule[data-state="pending"]  { color: var(--state-pending);  background: var(--state-pending-bg); }
+.capsule[data-state="queued"]   { color: var(--state-queued);   background: var(--state-queued-bg); }
+.capsule[data-state="error"]    { color: var(--state-error);    background: var(--state-error-bg); }
+.capsule[data-state="degraded"] { color: var(--state-degraded); background: var(--state-degraded-bg); }
+.capsule[data-state="info"]     { color: var(--state-info);     background: var(--state-info-bg); }
+/* Stage-tinted capsules */
+.capsule[data-stage="stt"]    { color: var(--stage-stt);    background: var(--stage-stt-bg); }
+.capsule[data-stage="proc"]   { color: var(--stage-proc);   background: var(--stage-proc-bg); }
+.capsule[data-stage="speech"] { color: var(--stage-speech); background: var(--stage-speech-bg); }
+.capsule[data-stage="asl"]    { color: var(--stage-asl);    background: var(--stage-asl-bg); }
+.capsule[data-stage="vdlp"]   { color: var(--stage-vdlp);   background: var(--stage-vdlp-bg); }
+.capsule[data-stage="gem"]    { color: var(--stage-gem);    background: var(--stage-gem-bg); }
+
+/* ─── Body baseline ────────────────────────────────────────────────────── */
+body {
+  font-family: var(--font-text);
+  color: var(--fg-1);
+  background: var(--bg-window);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}

@@ -114,6 +114,43 @@ struct APIClient {
         return String(data: data, encoding: .utf8) ?? ""
     }
 
+    /// Resumo do dossiê (`/patients/{id}/info`). Parse defensivo: tolera variações de schema.
+    func patientInfo(patientId: String) async throws -> PatientInfo {
+        let req = makeRequest("patients/\(patientId)/info")
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        try Self.check(resp, data)
+        let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
+
+        var info = PatientInfo()
+        info.patientId = patientId
+        info.name = (obj["patient_name"] ?? obj["name"]) as? String
+
+        if let sessions = obj["sessions"] as? [Any] {
+            info.sessionCount = sessions.count
+            if let last = sessions.last as? [String: Any] {
+                info.lastSession = (last["date"] ?? last["timestamp"] ?? last["session_id"]) as? String
+            }
+        } else if let n = obj["session_count"] as? Int {
+            info.sessionCount = n
+        }
+
+        // clinical_summary pode estar aninhado ou no topo.
+        let cs = (obj["clinical_summary"] as? [String: Any]) ?? obj
+        func strings(_ keys: [String]) -> [String] {
+            for k in keys {
+                if let arr = cs[k] as? [String] { return arr }
+                if let arr = cs[k] as? [Any] { return arr.compactMap { $0 as? String } }
+            }
+            return []
+        }
+        info.icdCodes = strings(["all_icd_codes", "icd_codes", "cid", "diagnoses"])
+        info.medications = strings(["all_medications", "medications", "medicamentos"])
+        info.topics = strings(["common_topics", "topics", "topicos"])
+        info.summary = (cs["summary"] ?? cs["narrative"] ?? cs["resumo"]) as? String
+
+        return info
+    }
+
     private static func mimeType(for ext: String) -> String {
         switch ext.lowercased() {
         case "m4a", "mp4": return "audio/mp4"

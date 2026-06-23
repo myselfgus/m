@@ -8,6 +8,7 @@
     <img src="https://img.shields.io/badge/ElevenLabs-Scribe_v2-16213e?style=flat-square" alt="ElevenLabs" />
     <img src="https://img.shields.io/badge/FastAPI_+_Celery-API-533483?style=flat-square&logo=fastapi&logoColor=white" alt="API" />
     <img src="https://img.shields.io/badge/SwiftUI-macOS_·_iOS-e94560?style=flat-square&logo=swift&logoColor=white" alt="SwiftUI" />
+    <img src="https://img.shields.io/badge/HealthOS-Liquid_Glass-3B82F6?style=flat-square" alt="HealthOS Design System" />
   </p>
 </div>
 
@@ -407,16 +408,125 @@ curl -X POST http://localhost:8000/jobs/pipeline -H 'content-type: application/j
   <br/><sub>o app usa o ícone <code>m-icon</code> (assets/) — <code>ui-swift/MEngine/AppIcon.icns</code></sub>
 </div>
 
-Cliente multiplataforma em [`ui-swift/`](ui-swift/): **gravar/selecionar áudio → enviar → disparar
-o pipeline → acompanhar o job → ler BIRP/SOAP** renderizados. No macOS roda direto via SwiftPM:
+Cliente multiplataforma em [`ui-swift/`](ui-swift/) no formato **dashboard**, seguindo o
+**HealthOS Design System** (macOS 26+ Liquid Glass): uma `NavigationSplitView` com sidebar de
+pacientes (buscável) e detalhe em abas — **Início** (stat cards), **Nova sessão**
+(gravar/selecionar áudio → enviar → pipeline → polling) e **Paciente** (Documentos · Pipeline ·
+Dossiê → leitor BIRP/SOAP). Os tokens (cores da marca, stage tints STT/PROC/SPEECH/ASL/VDLP/GEM,
+**SF Pro/SF Mono**, glass cards, capsules) vivem em
+[`ui-swift/design/healthos/`](ui-swift/design/healthos/) e são portados para SwiftUI nativo em
+[`HealthOSTheme.swift`](ui-swift/MEngine/HealthOSTheme.swift). A iconografia usa **SF Symbols** +
+o asset **`m-icon`** como marca do app. No macOS roda direto via SwiftPM:
 
 ```bash
 cd ui-swift && swift build && swift run        # janela do app (aponta p/ http://localhost:8000)
 ```
 
 Para iOS e distribuição assinada, monte o projeto Xcode multiplataforma e adicione o `m-icon` ao
-`Assets.xcassets/AppIcon` — passo-a-passo, Info.plist (microfone), entitlements e ATS em
-[`ui-swift/README.md`](ui-swift/README.md).
+`Assets.xcassets/AppIcon` — passo-a-passo, design system, Info.plist (microfone), entitlements e
+ATS em [`ui-swift/README.md`](ui-swift/README.md).
+
+---
+
+## Design System (HealthOS)
+
+O app SwiftUI segue o **HealthOS Design System** (macOS 26+ **Liquid Glass**) — mesma família de
+produto do M-Engine. Os tokens canônicos vivem em
+[`ui-swift/design/healthos/`](ui-swift/design/healthos/) (`colors_and_type.css` + glyphs) e são
+portados para SwiftUI **nativo** em
+[`ui-swift/MEngine/HealthOSTheme.swift`](ui-swift/MEngine/HealthOSTheme.swift). Princípio
+**system-first**: as famílias resolvem para **SF Pro / SF Pro Rounded / SF Mono** no Apple, então
+**nenhuma fonte é embarcada**; a iconografia é **SF Symbols** + o asset **`m-icon`** como marca.
+
+### Paleta da marca
+
+| Token | Hex | Uso |
+|---|---|---|
+| `ink` | ![ink](https://img.shields.io/badge/-1C2533-1C2533?style=flat-square) | texto/wordmark — navy quase-preto |
+| `navy` | ![navy](https://img.shields.io/badge/-1C3A63-1C3A63?style=flat-square) | metade escura da marca · avatares |
+| `blue` | ![blue](https://img.shields.io/badge/-3B82F6-3B82F6?style=flat-square) | **tint do sistema** · acento primário |
+| `blueBright` | ![bb](https://img.shields.io/badge/-4F8DF5-4F8DF5?style=flat-square) | realce |
+| `blueDeep` | ![bd](https://img.shields.io/badge/-1E5BC6-1E5BC6?style=flat-square) | pressionado/ativo |
+
+### Stage tints — espelham o pipeline
+
+Cada estágio tem uma cor; usadas nas **capsules** e ícones do app (track de pipeline, documentos).
+
+| Stage | Cor | | Stage | Cor |
+|---|---|---|---|---|
+| **STT** | ![stt](https://img.shields.io/badge/-64748B-64748B?style=flat-square) | | **ASL** | ![asl](https://img.shields.io/badge/-5B5BD6-5B5BD6?style=flat-square) |
+| **PROC** | ![proc](https://img.shields.io/badge/-3B82F6-3B82F6?style=flat-square) | | **VDLP** | ![vdlp](https://img.shields.io/badge/-8B5CF6-8B5CF6?style=flat-square) |
+| **SPEECH** | ![spe](https://img.shields.io/badge/-0EA5B7-0EA5B7?style=flat-square) | | **GEM** | ![gem](https://img.shields.io/badge/-1FA86F-1FA86F?style=flat-square) |
+
+### Estados semânticos
+
+| Estado | Cor | Estado | Cor |
+|---|---|---|---|
+| `complete` | ![c](https://img.shields.io/badge/-1FA86F-1FA86F?style=flat-square) | `error` | ![e](https://img.shields.io/badge/-C2354A-C2354A?style=flat-square) |
+| `running` | ![r](https://img.shields.io/badge/-3B82F6-3B82F6?style=flat-square) | `review` | ![rv](https://img.shields.io/badge/-C2780C-C2780C?style=flat-square) |
+| `info` | ![i](https://img.shields.io/badge/-2C5BA0-2C5BA0?style=flat-square) | `queued` | ![q](https://img.shields.io/badge/-7A8699-7A8699?style=flat-square) |
+
+### Tipografia (escala macOS 26)
+
+| Estilo | Tamanho/peso | SwiftUI |
+|---|---|---|
+| Large Title | 26 · bold | `.hosLargeTitle` |
+| Title 1 · 2 · 3 | 22 · 17 · 15 semibold | `.hosTitle1` · `.hosTitle2` · `.hosTitle3` |
+| Headline | 13 · semibold | `.hosHeadline` |
+| Body · Callout | 13 · 12 regular | `.hosBody` · `.hosCallout` |
+| Subhead · Footnote · Caption | 11/11/10 | `.hosSubhead` · `.hosFootnote` · `.hosCaption` |
+| Mono (IDs/transcrição) | 12 · SF Mono | `.hosMono` |
+| Stat (números) | rounded | `.hosStat()` |
+
+### Espaçamento, raios e materiais
+
+- **Grid 8pt**: `4 · 8 · 12 · 16 · 20 · 24 · 32 …`
+- **Raios**: `sm 6 · md 8 · lg 12 · xl 16 · pill`
+- **Liquid Glass**: `.healthCard()` → `.regularMaterial` + raio 16 + borda fina + sombra suave.
+
+### Componentes (tokens → SwiftUI)
+
+| Componente | Token/CSS | SwiftUI |
+|---|---|---|
+| Glass card | `.glass-regular` | `.healthCard()` |
+| Capsule/status | `.capsule[data-state\|stage]` | `StatusPill(text:color:systemImage:)` |
+| Stat card | dashboard Home | `StatCard(symbol:value:label:tint:)` |
+| Cores/escala | `:root` vars | `enum HOS` · `extension Font` |
+| Marca | connection-node mark | `BrandMark` (usa `m-icon`) |
+
+### Iconografia (SF Symbols)
+
+| Contexto | Símbolo |
+|---|---|
+| Início · Nova sessão | `house.fill` · `waveform.badge.mic` |
+| Paciente · documentos | `person.crop.circle.fill` · `doc.text.fill` |
+| BIRP · SOAP · Seguimento | `bolt.heart.fill` · `doc.text.fill` · `chart.line.uptrend.xyaxis` |
+| CID · medicamentos · tópicos | `cross.case.fill` · `pills.fill` · `tag.fill` |
+
+### Layout do dashboard
+
+```mermaid
+flowchart LR
+    subgraph SB["Sidebar"]
+        direction TB
+        BR["m-icon · M-Engine"]
+        I1["🏠 Início"]
+        I2["🎙 Nova sessão"]
+        PL["👤 Pacientes<br/><sub>(buscável)</sub>"]
+    end
+    subgraph DET["Detalhe"]
+        direction TB
+        H["Início → stat cards"]
+        N["Nova sessão → áudio → pipeline → polling"]
+        P["Paciente → Documentos · Pipeline · Dossiê"]
+    end
+    SB --> DET
+    style BR fill:#1C3A63,color:#fff,stroke:none
+    style P fill:#3B82F6,color:#fff,stroke:none
+```
+
+> Detalhes de setup (Xcode, Info.plist, entitlements, ATS) e o mapeamento completo dos tokens em
+> [`ui-swift/README.md`](ui-swift/README.md) e [`ui-swift/design/healthos/README.md`](ui-swift/design/healthos/README.md).
 
 ---
 

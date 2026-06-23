@@ -47,6 +47,19 @@ struct DocumentsResponse: Codable {
     }
 }
 
+/// Resumo do dossiê (info.json) — decodificado de forma defensiva no APIClient,
+/// pois o schema pode variar entre versões do pipeline.
+struct PatientInfo {
+    var name: String?
+    var patientId: String?
+    var sessionCount: Int = 0
+    var icdCodes: [String] = []
+    var medications: [String] = []
+    var topics: [String] = []
+    var summary: String?
+    var lastSession: String?
+}
+
 /// Alias de modelo enviado ao pipeline. `nil` => cada stage usa seu default
 /// (birp/normalize/soap → Sonnet; asl/dimensional/gem → Opus 4.8).
 enum ModelChoice: String, CaseIterable, Identifiable {

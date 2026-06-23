@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48" role="img" aria-label="Patient chat">
+  <defs><linearGradient id="gc" x1="0" y1="0" x2="48" y2="48"><stop offset="0" stop-color="#3B82F6"></stop><stop offset="1" stop-color="#1C3A63"></stop></linearGradient></defs>
+  <path d="M9 12 h30 a4 4 0 0 1 4 4 v15 a4 4 0 0 1 -4 4 H22 l-9 7 v-7 h-4 a4 4 0 0 1 -4 -4 V16 a4 4 0 0 1 4 -4 Z" fill="url(#gc)" opacity="0.12" stroke="url(#gc)" stroke-width="2" stroke-linejoin="round"></path>
+  <line x1="14" y1="20" x2="34" y2="20" stroke="url(#gc)" stroke-width="2" stroke-linecap="round"></line>
+  <line x1="14" y1="26" x2="28" y2="26" stroke="url(#gc)" stroke-width="2" stroke-linecap="round"></line>
+</svg>

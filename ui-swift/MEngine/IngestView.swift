@@ -1,9 +1,9 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// Tela "Sessão": grava ou seleciona um áudio, envia e dispara o pipeline,
-/// acompanhando o job por polling até concluir.
-struct IngestView: View {
+/// "Nova sessão": grava ou seleciona um áudio, envia, dispara o pipeline e acompanha
+/// o job por polling. Estilo HealthOS (glass cards, capsules, stage tints).
+struct NewSessionView: View {
     @EnvironmentObject private var settings: AppSettings
     @StateObject private var recorder = AudioRecorder()
 
@@ -19,79 +19,115 @@ struct IngestView: View {
 
     enum Phase: Equatable { case idle, uploading, processing, done, failed }
 
-    /// Áudio "ativo": gravado ou selecionado.
     private var activeAudio: URL? { selectedFile ?? recorder.lastRecordingURL }
+    private var busy: Bool { phase == .uploading || phase == .processing }
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                Text("Nova sessão").font(.largeTitle.bold())
+            VStack(alignment: .leading, spacing: 18) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Nova sessão").font(.hosLargeTitle)
+                    Text("Áudio → transcrição → BIRP ∥ ASL · VDLP · GEM · SOAP").font(.hosBody).foregroundStyle(.secondary)
+                }
 
+                pipelineTrack
                 recordingCard
                 fileCard
                 optionsCard
                 actionSection
             }
             .padding(24)
-            .frame(maxWidth: 680, alignment: .leading)
-            .frame(maxWidth: .infinity)
+            .frame(maxWidth: 760, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .background(.background)
+        .navigationTitle("Nova sessão")
         .fileImporter(isPresented: $showImporter, allowedContentTypes: audioTypes) { result in
             if case let .success(url) = result { selectedFile = url }
         }
     }
 
-    // MARK: - Seções
+    // MARK: - Stage track (legenda visual do pipeline)
+
+    private var pipelineTrack: some View {
+        let stages: [(String, Color)] = [
+            ("STT", HOS.stStt), ("PROC", HOS.stProc), ("BIRP", HOS.stProc),
+            ("ASL", HOS.stAsl), ("VDLP", HOS.stVdlp), ("GEM", HOS.stGem), ("SOAP", HOS.navy)
+        ]
+        return ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                ForEach(Array(stages.enumerated()), id: \.offset) { i, s in
+                    StatusPill(text: s.0, color: s.1)
+                    if i < stages.count - 1 {
+                        Image(systemName: "chevron.compact.right").font(.caption2).foregroundStyle(.tertiary)
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - Cards
 
     private var recordingCard: some View {
-        GroupBox("Gravar") {
-            HStack(spacing: 16) {
+        VStack(alignment: .leading, spacing: 12) {
+            Label("Gravar", systemImage: "mic.fill").font(.hosTitle3).foregroundStyle(HOS.stSpeech)
+            HStack(spacing: 14) {
                 Button {
                     Task { recorder.isRecording ? stopRecording() : await recorder.start() }
                 } label: {
-                    Label(
-                        recorder.isRecording ? "Parar" : "Gravar",
-                        systemImage: recorder.isRecording ? "stop.circle.fill" : "record.circle"
-                    )
-                    .font(.title3)
+                    Label(recorder.isRecording ? "Parar" : "Gravar",
+                          systemImage: recorder.isRecording ? "stop.circle.fill" : "record.circle")
                 }
-                .tint(recorder.isRecording ? .red : .accentColor)
+                .buttonStyle(.borderedProminent)
+                .tint(recorder.isRecording ? HOS.error : HOS.blue)
+                .controlSize(.large)
 
                 if recorder.isRecording {
-                    Label("Gravando…", systemImage: "waveform").foregroundStyle(.red)
+                    StatusPill(text: "Gravando", color: HOS.error, systemImage: "waveform")
                 }
                 if let msg = recorder.errorMessage {
-                    Text(msg).font(.caption).foregroundStyle(.red)
+                    Text(msg).font(.hosFootnote).foregroundStyle(HOS.error)
                 }
             }
-            .padding(6)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .healthCard()
     }
 
     private var fileCard: some View {
-        GroupBox("Arquivo") {
+        VStack(alignment: .leading, spacing: 12) {
+            Label("Arquivo", systemImage: "folder.fill").font(.hosTitle3).foregroundStyle(HOS.stStt)
             HStack {
-                Button { showImporter = true } label: { Label("Selecionar áudio…", systemImage: "folder") }
+                Button { showImporter = true } label: { Label("Selecionar áudio…", systemImage: "doc.badge.plus") }
+                    .buttonStyle(.bordered)
                 Spacer()
                 if let activeAudio {
-                    Text(activeAudio.lastPathComponent).font(.callout).foregroundStyle(.secondary)
+                    Text(activeAudio.lastPathComponent)
+                        .font(.hosMono).foregroundStyle(.secondary)
                         .lineLimit(1).truncationMode(.middle)
                 }
             }
-            .padding(6)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .healthCard()
     }
 
     private var optionsCard: some View {
-        GroupBox("Opções") {
-            VStack(alignment: .leading, spacing: 10) {
-                Picker("Modelo", selection: $model) {
-                    ForEach(ModelChoice.allCases) { Text($0.rawValue).tag($0) }
-                }
-                Toggle("Análise profunda (ASL → VDLP → GEM → SOAP)", isOn: $deep)
+        VStack(alignment: .leading, spacing: 12) {
+            Label("Opções", systemImage: "slider.horizontal.3").font(.hosTitle3).foregroundStyle(HOS.stProc)
+            Picker("Modelo", selection: $model) {
+                ForEach(ModelChoice.allCases) { Text($0.rawValue).tag($0) }
             }
-            .padding(6)
+            Toggle(isOn: $deep) {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Análise profunda").font(.hosHeadline)
+                    Text("ASL → VDLP → GEM → SOAP").font(.hosCaption).foregroundStyle(.secondary)
+                }
+            }
+            .tint(HOS.blue)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .healthCard()
     }
 
     @ViewBuilder
@@ -103,19 +139,33 @@ struct IngestView: View {
                 .frame(maxWidth: .infinity)
         }
         .buttonStyle(.borderedProminent)
+        .tint(HOS.blue)
         .controlSize(.large)
-        .disabled(activeAudio == nil || phase == .uploading || phase == .processing)
+        .disabled(activeAudio == nil || busy)
 
         switch phase {
         case .uploading, .processing:
-            HStack { ProgressView().controlSize(.small); Text(statusText) }
-        case .done:
-            VStack(alignment: .leading, spacing: 4) {
-                Label("Concluído", systemImage: "checkmark.seal.fill").foregroundStyle(.green)
-                if let resultPath { Text(resultPath).font(.caption).foregroundStyle(.secondary) }
+            HStack(spacing: 10) {
+                ProgressView().controlSize(.small)
+                Text(statusText).font(.hosBody)
+                Spacer()
+                StatusPill(text: phase == .uploading ? "Enviando" : "Processando", color: HOS.running)
             }
+            .healthCard(padding: 12)
+        case .done:
+            VStack(alignment: .leading, spacing: 6) {
+                StatusPill(text: "Concluído", color: HOS.complete, systemImage: "checkmark.seal.fill")
+                if let resultPath { Text(resultPath).font(.hosMono).foregroundStyle(.secondary) }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .healthCard(padding: 12)
         case .failed:
-            Label(errorText ?? "Erro", systemImage: "xmark.octagon.fill").foregroundStyle(.red)
+            HStack(spacing: 10) {
+                StatusPill(text: "Erro", color: HOS.error, systemImage: "xmark.octagon.fill")
+                Text(errorText ?? "Falha").font(.hosFootnote).foregroundStyle(HOS.error)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .healthCard(padding: 12)
         case .idle:
             EmptyView()
         }
@@ -125,7 +175,7 @@ struct IngestView: View {
 
     private func stopRecording() {
         recorder.stop()
-        selectedFile = nil // grava nova; o recorder vira o áudio ativo
+        selectedFile = nil
     }
 
     private func process() async {
@@ -137,7 +187,6 @@ struct IngestView: View {
 
         do {
             let client = try settings.makeClient()
-
             phase = .uploading
             statusText = "Enviando áudio…"
             let uploaded = try await client.uploadAudio(fileURL: audio)
@@ -167,10 +216,9 @@ struct IngestView: View {
                 }
                 return
             }
-            try await Task.sleep(nanoseconds: 5_000_000_000) // 5s
+            try await Task.sleep(nanoseconds: 5_000_000_000)
         }
     }
 
-    // .audio cobre m4a/mp3/wav/aac/flac/ogg; .movie cobre mp4/mov. A API valida a extensão.
     private var audioTypes: [UTType] { [.audio, .movie] }
 }
