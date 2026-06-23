@@ -45,7 +45,9 @@ services:
       # Volume de dados clínicos (PHI). ${M_BASE} no host -> /var/lib/m-engine no container.
       - ${M_BASE:?M_BASE deve ser definido (volume de PHI; sem default silencioso)}:/var/lib/m-engine
     ports:
-      - "${M_API_PORT:-8000}:8000"
+      # Bind na interface escolhida. Default 0.0.0.0 (compatível); em produção PHI,
+      # defina M_API_BIND com o IP da tailnet (ex.: 100.x.y.z) p/ NÃO expor publicamente.
+      - "${M_API_BIND:-0.0.0.0}:${M_API_PORT:-8000}:8000"
     depends_on:
       redis:
         condition: service_healthy
@@ -72,7 +74,10 @@ services:
         condition: service_healthy
     networks:
       - m-net
-    # Sem healthcheck HTTP (worker não expõe porta); o Celery cuida do liveness.
+    # Worker não expõe HTTP; desabilita o healthcheck HTTP herdado da imagem
+    # (o Celery cuida do liveness — senão o container fica "unhealthy" à toa).
+    healthcheck:
+      disable: true
     command: >
       celery -A m_engine.tasks worker --loglevel=info --concurrency=2
 

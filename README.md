@@ -563,6 +563,14 @@ flowchart LR
 Unidades em `deploy/systemd/` (usuário `mengine`, `EnvironmentFile=/etc/m-engine.env`,
 `Restart=always`, hardening). Logs: `journalctl -u m-engine-api -f`.
 
+### Magalu Cloud — VM 24h (runbook)
+
+Passo-a-passo completo em [`deploy/magalu.md`](deploy/magalu.md): **VM** (compute) + **Block Storage**
+cifrado pelo provider montado em `$M_BASE` (dossiês + áudio), acesso **privado via Tailscale** (API
+fora da internet pública via `M_API_BIND`) e **backup** para o **Object Storage nativo da Magalu**
+(`mgc object-storage objects sync` em `deploy/backup.sh` + cron). Separa **m-engine** (compute
+descartável) de **m-data** (estado no volume).
+
 ---
 
 ## Segurança & PHI
