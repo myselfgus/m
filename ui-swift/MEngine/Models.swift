@@ -186,6 +186,75 @@ struct PatientInfo {
     var lastSession: String?
 }
 
+// MARK: - Criação de paciente / consulta / documento
+
+/// Corpo do POST de criação de paciente. Emite snake_case, omitindo nils.
+struct CreatePatientRequest {
+    var fullName: String
+    var cpf: String?
+    var phone: String?
+    var age: Int?
+    var email: String?
+    var notes: String?
+
+    /// Payload JSON (snake_case) para o POST `/patients`; omite campos nulos.
+    func jsonPayload() -> [String: Any] {
+        var p: [String: Any] = ["full_name": fullName]
+        if let cpf { p["cpf"] = cpf }
+        if let phone { p["phone"] = phone }
+        if let age { p["age"] = age }
+        if let email { p["email"] = email }
+        if let notes { p["notes"] = notes }
+        return p
+    }
+}
+
+/// Consulta recém-criada (resposta do POST `/patients/{slug}/consultations`).
+struct ConsultationCreated: Codable {
+    let id: String
+    let date: String
+}
+
+/// Stage do pipeline disponível (chave + rótulo legível), para seleção na UI.
+struct StageInfo: Codable, Identifiable {
+    let key: String
+    let label: String
+    var id: String { key }
+}
+
+// MARK: - Assistente (chat via WebSocket)
+
+/// Papel de uma mensagem no chat do assistente.
+enum ChatRole {
+    case user
+    case assistant
+    case tool
+    case system
+    case error
+}
+
+/// Uma mensagem exibida no chat do assistente.
+struct ChatMessage: Identifiable {
+    let id = UUID()
+    var role: ChatRole
+    var text: String
+    var toolName: String?
+
+    init(role: ChatRole, text: String, toolName: String? = nil) {
+        self.role = role
+        self.text = text
+        self.toolName = toolName
+    }
+}
+
+/// Frame recebido do WebSocket do assistente: {type, text?, name?, summary?, …}.
+struct ChatEvent: Decodable {
+    let type: String
+    let text: String?
+    let name: String?
+    let summary: String?
+}
+
 /// Alias de modelo enviado ao pipeline. `nil` => cada stage usa seu default
 /// (birp/normalize/soap → Sonnet; asl/dimensional/gem → Opus 4.8).
 enum ModelChoice: String, CaseIterable, Identifiable {

@@ -20,18 +20,22 @@ Endpoints:
 
 from __future__ import annotations
 
+import asyncio
+import json
 from pathlib import Path
 from typing import Optional
 
 from celery.result import AsyncResult
-from fastapi import Body, FastAPI, File, HTTPException, UploadFile
+from fastapi import Body, FastAPI, File, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
 
 from m_engine.config import get_settings
 from m_engine import store
+from m_engine.assistant import AssistantSession
 from m_engine.store import load_info, pat_dir
 from m_engine.tasks import STAGE_TASKS, celery_app
+from m_engine.util import today
 
 # Extensões de áudio/vídeo aceitas no upload (mesma lista do stage transcribe).
 AUDIO_EXTS = {".m4a", ".mp3", ".wav", ".aac", ".flac", ".ogg", ".webm", ".mp4", ".mov"}
@@ -131,6 +135,40 @@ class ConsultationsResponse(BaseModel):
 class DocumentWriteResult(BaseModel):
     ok: bool
     bytes: int
+
+
+class PatientCreate(BaseModel):
+    """Corpo de criação de paciente. Apenas `full_name` é obrigatório."""
+
+    full_name: str = Field(..., min_length=1)
+    cpf: Optional[str] = None
+    phone: Optional[str] = None
+    age: Optional[int] = None
+    email: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class ConsultationCreate(BaseModel):
+    """Corpo de criação de consulta. `date` opcional (default = hoje)."""
+
+    date: Optional[str] = None
+
+
+class ConsultationCreateResult(BaseModel):
+    id: str
+    date: str
+
+
+class DocumentCreate(BaseModel):
+    """Corpo de criação de um novo documento Markdown numa consulta."""
+
+    name: str = Field(..., min_length=1)
+    content: str = ""
+
+
+class DocumentCreateResult(BaseModel):
+    ok: bool
+    name: str
 
 
 # Helper de segurança: confina um path sob pat_dir()/slug/... rejeitando traversal.
@@ -335,6 +373,165 @@ def get_patient_info(slug: str) -> dict:
     if not info:
         raise HTTPException(404, f"Dossiê ausente para {slug}")
     return info
+
+
+# ---------------------------------------------------------------------------
+# CRUD — criação de dossiês, consultas, documentos e arquivos
+# ---------------------------------------------------------------------------
+@app.post("/patients")
+def create_patient(body: PatientCreate) -> dict:
+    """Cria um dossiê novo a partir do nome completo e devolve o profile.json."""
+    slug = store.generate_slug(body.full_name)
+    store.ensure_profile(slug, patient_name=body.full_name)
+    prof = store.load_profile(slug)
+    prof["display_name"] = body.full_name
+    prof["full_name"] = body.full_name
+    for field in ("cpf", "phone", "age", "email", "notes"):
+        value = getattr(body, field)
+        if value is not None:
+            prof[field] = value
+    store.save_profile(slug, prof)  # força slug + updated_at
+    return store.load_profile(slug)
+
+
+@app.post("/patients/{slug}/consultations", response_model=ConsultationCreateResult)
+def create_consultation(slug: str, body: ConsultationCreate) -> ConsultationCreateResult:
+    """Cria (reserva) uma consulta para a data informada (default = hoje)."""
+    root = _patient_root(slug)
+    if not root.is_dir():
+        raise HTTPException(404, f"Paciente não encontrado: {slug}")
+    date = body.date or today()
+    store.consult_dir(slug, date, create=True)  # cria a pasta + reserva C{n} no index
+    cid = store.resolve_consult(slug, date, create=False)
+    if not cid:
+        raise HTTPException(500, "Falha ao resolver a consulta criada.")
+    return ConsultationCreateResult(id=cid, date=date)
+
+
+@app.post(
+    "/patients/{slug}/consultations/{cid}/documents",
+    response_model=DocumentCreateResult,
+)
+def create_consult_document(slug: str, cid: str, body: DocumentCreate) -> DocumentCreateResult:
+    """Cria um NOVO documento Markdown em pat/<slug>/<cid>/ com o conteúdo dado."""
+    root = _patient_root(slug)
+    safe_cid = Path(cid).name
+    if not safe_cid or safe_cid != cid:
+        raise HTTPException(400, "Id de consulta inválido.")
+    cdir = root / safe_cid
+    if not cdir.is_dir():
+        raise HTTPException(404, f"Consulta não encontrada: {safe_cid}")
+
+    name = Path(body.name).name  # sanitiza traversal
+    if not name or name in (".", ".."):
+        raise HTTPException(400, "Nome de documento inválido.")
+    if Path(name).suffix.lower() != ".md":
+        name = f"{name}.md"
+
+    dest = (cdir / name).resolve()
+    # Confina rigorosamente sob a pasta da consulta.
+    if cdir.resolve() not in dest.parents:
+        raise HTTPException(400, "Caminho fora da consulta.")
+    dest.write_text(body.content, encoding="utf-8")
+    return DocumentCreateResult(ok=True, name=name)
+
+
+@app.post("/patients/{slug}/consultations/{cid}/files", response_model=UploadResponse)
+async def upload_consult_file(slug: str, cid: str, file: UploadFile = File(...)) -> UploadResponse:
+    """Salva um arquivo (qualquer tipo) em pat/<slug>/<cid>/<filename>."""
+    root = _patient_root(slug)
+    safe_cid = Path(cid).name
+    if not safe_cid or safe_cid != cid:
+        raise HTTPException(400, "Id de consulta inválido.")
+    cdir = root / safe_cid
+    if not cdir.is_dir():
+        raise HTTPException(404, f"Consulta não encontrada: {safe_cid}")
+
+    name = Path(file.filename or "").name  # evita traversal
+    if not name or name in (".", ".."):
+        raise HTTPException(422, "Nome de arquivo ausente ou inválido.")
+    dest = (cdir / name).resolve()
+    if cdir.resolve() not in dest.parents:
+        raise HTTPException(400, "Caminho fora da consulta.")
+
+    data = await file.read()
+    if not data:
+        raise HTTPException(422, "Arquivo vazio.")
+    dest.write_bytes(data)
+    return UploadResponse(filename=name, path=str(dest))
+
+
+# Stages expostos para a UI (rótulos PT-BR). O disparo continua via POST /jobs/{stage}.
+_STAGES: list[dict[str, str]] = [
+    {"key": "transcribe", "label": "Transcrição"},
+    {"key": "normalize", "label": "Normalização"},
+    {"key": "asl", "label": "Análise Sistêmica Linguística (ASL)"},
+    {"key": "dimensional", "label": "Perfil Dimensional (VDLP)"},
+    {"key": "gem", "label": "Grafo do Espaço Mental (GEM)"},
+    {"key": "birp", "label": "Nota BIRP"},
+    {"key": "soap_trajetorial", "label": "SOAP Trajetorial"},
+    {"key": "soap_longitudinal", "label": "SOAP Longitudinal"},
+    {"key": "pipeline", "label": "Pipeline completo"},
+]
+
+
+@app.get("/stages")
+def list_stages() -> dict:
+    """Lista os stages disponíveis (chave técnica + rótulo PT-BR) para a UI."""
+    return {"stages": _STAGES}
+
+
+# ---------------------------------------------------------------------------
+# Assistente agêntico (Claude Code CLI) sobre WebSocket
+# ---------------------------------------------------------------------------
+@app.websocket("/assistant/ws")
+async def assistant_ws(websocket: WebSocket, slug: Optional[str] = None) -> None:
+    """
+    Ponte WebSocket ↔ subprocesso do CLI Claude Code (streaming bidirecional).
+
+    Cliente → servidor: {"type":"user","text":"..."}
+    Servidor → cliente: {"type":"ready"} | {"type":"assistant","text":...}
+                        | {"type":"tool","name":...,"summary":...}
+                        | {"type":"result","text":...,"usage":{...}}
+                        | {"type":"error","message":...}
+    """
+    await websocket.accept()
+    session = AssistantSession(slug=slug)
+
+    async def forward(frame: dict) -> None:
+        await websocket.send_json(frame)
+
+    pump_task: Optional[asyncio.Task] = None
+    try:
+        await session.start()
+        await websocket.send_json({"type": "ready"})
+
+        # Task que lê o stdout do CLI e empurra frames normalizados ao cliente.
+        pump_task = asyncio.create_task(session.read_events(forward))
+
+        while True:
+            data = await websocket.receive_text()
+            try:
+                msg = json.loads(data)
+            except json.JSONDecodeError:
+                await websocket.send_json({"type": "error", "message": "JSON inválido."})
+                continue
+            if msg.get("type") == "user":
+                text = (msg.get("text") or "").strip()
+                if text:
+                    await session.send_user(text)
+            # Outros tipos de frame do cliente são ignorados silenciosamente.
+    except WebSocketDisconnect:
+        pass
+    except Exception as exc:  # noqa: BLE001 — reporta e encerra de forma limpa
+        try:
+            await websocket.send_json({"type": "error", "message": str(exc)[:500]})
+        except Exception:
+            pass
+    finally:
+        if pump_task:
+            pump_task.cancel()
+        await session.close()
 
 
 @app.get("/healthz")

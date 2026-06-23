@@ -15,7 +15,15 @@ struct ContentView: View {
     @State private var search = ""
     @State private var loading = false
     @State private var showSettings = false
+    @State private var showNewPatient = false
+    @AppStorage("m_show_assistant") private var showAssistant = true
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
+
+    /// Slug do paciente selecionado (ou nil em Início/Nova sessão).
+    private var currentSlug: String? {
+        if case let .patient(slug) = nav { return slug }
+        return nil
+    }
 
     private var filtered: [Patient] {
         guard !search.isEmpty else { return patients }
@@ -32,8 +40,29 @@ struct ContentView: View {
         } detail: {
             detail
         }
+        .inspector(isPresented: $showAssistant) {
+            AssistantChatView(slug: currentSlug)
+                .inspectorColumnWidth(min: 300, ideal: 340, max: 460)
+        }
+        .toolbar {
+            ToolbarItem {
+                Button { showNewPatient = true } label: { Image(systemName: "person.badge.plus") }
+                    .help("Novo paciente")
+            }
+            ToolbarItem {
+                Button { showAssistant.toggle() } label: { Image(systemName: "sparkles") }
+                    .help(showAssistant ? "Ocultar assistente" : "Mostrar assistente")
+            }
+        }
         .task { await loadPatients() }
         .sheet(isPresented: $showSettings) { SettingsView() }
+        .sheet(isPresented: $showNewPatient) {
+            NewPatientView(onCreated: { slug in
+                nav = .patient(slug)
+                showNewPatient = false
+                Task { await loadPatients() }
+            })
+        }
     }
 
     // MARK: - Sidebar

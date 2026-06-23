@@ -152,6 +152,91 @@ struct APIClient {
         return (obj?["bytes"] as? Int) ?? content.utf8.count
     }
 
+    // MARK: - Criação (paciente / consulta / documento / arquivo)
+
+    /// Cria um paciente (`POST /patients`) e devolve o perfil resultante.
+    func createPatient(_ req: CreatePatientRequest) async throws -> PatientProfile {
+        var r = makeRequest("patients", method: "POST")
+        r.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        r.httpBody = try JSONSerialization.data(withJSONObject: req.jsonPayload())
+        return try await send(r, as: PatientProfile.self)
+    }
+
+    /// Cria uma consulta para o paciente (`POST /patients/{slug}/consultations`).
+    /// Envia `{date}` quando informado.
+    func createConsultation(slug: String, date: String?) async throws -> ConsultationCreated {
+        let s = Self.escape(slug)
+        var r = makeRequest("patients/\(s)/consultations", method: "POST")
+        r.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        var payload: [String: Any] = [:]
+        if let date { payload["date"] = date }
+        r.httpBody = try JSONSerialization.data(withJSONObject: payload)
+        return try await send(r, as: ConsultationCreated.self)
+    }
+
+    /// Cria um documento Markdown numa consulta
+    /// (`POST /patients/{slug}/consultations/{cid}/documents`). Devolve o nome final.
+    @discardableResult
+    func createDocument(slug: String, consultationId: String, name: String, content: String) async throws -> String {
+        let s = Self.escape(slug)
+        let cid = Self.escape(consultationId)
+        var r = makeRequest("patients/\(s)/consultations/\(cid)/documents", method: "POST")
+        r.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        r.httpBody = try JSONSerialization.data(withJSONObject: ["name": name, "content": content])
+        let (data, resp) = try await URLSession.shared.data(for: r)
+        try Self.check(resp, data)
+        let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+        return (obj?["name"] as? String) ?? name
+    }
+
+    /// Sobe um arquivo arbitrário para uma consulta
+    /// (`POST /patients/{slug}/consultations/{cid}/files`, multipart campo "file").
+    /// Devolve o nome do arquivo gravado.
+    func uploadFile(slug: String, consultationId: String, fileURL: URL) async throws -> String {
+        let s = Self.escape(slug)
+        let cid = Self.escape(consultationId)
+        var req = makeRequest("patients/\(s)/consultations/\(cid)/files", method: "POST")
+        let boundary = "Boundary-\(UUID().uuidString)"
+        req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+
+        let filename = fileURL.lastPathComponent
+        let mime = Self.mimeType(for: fileURL.pathExtension)
+        let fileData = try Data(contentsOf: fileURL)
+
+        var body = Data()
+        func append(_ str: String) { body.append(str.data(using: .utf8)!) }
+        append("--\(boundary)\r\n")
+        append("Content-Disposition: form-data; name=\"file\"; filename=\"\(filename)\"\r\n")
+        append("Content-Type: \(mime)\r\n\r\n")
+        body.append(fileData)
+        append("\r\n--\(boundary)--\r\n")
+
+        let (data, resp) = try await URLSession.shared.upload(for: req, from: body)
+        try Self.check(resp, data)
+        let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+        return (obj?["filename"] as? String) ?? filename
+    }
+
+    // MARK: - Stages / jobs
+
+    /// Lista os stages disponíveis (`GET /stages` → {stages:[...]}).
+    func fetchStages() async throws -> [StageInfo] {
+        struct StagesResponse: Decodable { let stages: [StageInfo] }
+        return try await send(makeRequest("stages"), as: StagesResponse.self).stages
+    }
+
+    /// Enfileira um stage individual (`POST /jobs/{stage}`).
+    /// Corpo: {patient_id: slug, date, model?, force}.
+    func enqueueStage(_ stage: String, slug: String, date: String, model: String?, force: Bool) async throws -> JobResponse {
+        let st = Self.escape(stage)
+        var r = makeRequest("jobs/\(st)", method: "POST")
+        r.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        var payload: [String: Any] = ["patient_id": slug, "date": date, "force": force]
+        if let model { payload["model"] = model }
+        r.httpBody = try JSONSerialization.data(withJSONObject: payload)
+        return try await send(r, as: JobResponse.self)
+    }
+
     private static func escape(_ s: String) -> String {
         s.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? s
     }
@@ -205,5 +290,134 @@ struct APIClient {
         case "mov": return "video/quicktime"
         default: return "application/octet-stream"
         }
+    }
+}
+
+// MARK: - Sessão do assistente (chat via WebSocket)
+
+/// Gerencia a conexão WebSocket com o assistente de chat (`/assistant/ws`).
+/// Decodifica frames `ChatEvent` e mantém `messages` para a UI.
+@MainActor
+final class AssistantSession: ObservableObject {
+    @Published var messages: [ChatMessage] = []
+    @Published var connected = false
+    @Published var thinking = false
+
+    private let wsURL: URL?
+    private let apiKey: String?
+    private var task: URLSessionWebSocketTask?
+    private let session = URLSession(configuration: .default)
+
+    /// Constrói a sessão. Deriva a URL ws/wss a partir da base http/https,
+    /// caminho "assistant/ws", com `?slug=` quando houver.
+    init(baseURL: URL, apiKey: String?, slug: String?) {
+        self.apiKey = (apiKey?.isEmpty == false) ? apiKey : nil
+
+        var url = baseURL.appendingPathComponent("assistant/ws")
+        if var comps = URLComponents(url: url, resolvingAgainstBaseURL: false) {
+            switch comps.scheme {
+            case "https": comps.scheme = "wss"
+            default: comps.scheme = "ws"
+            }
+            if let slug, !slug.isEmpty {
+                comps.queryItems = [URLQueryItem(name: "slug", value: slug)]
+            }
+            url = comps.url ?? url
+        }
+        self.wsURL = url
+    }
+
+    /// Abre o socket e inicia o loop de recepção.
+    func connect() {
+        guard task == nil, let wsURL else { return }
+        var req = URLRequest(url: wsURL)
+        if let apiKey { req.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization") }
+        let t = session.webSocketTask(with: req)
+        task = t
+        t.resume()
+        receive()
+    }
+
+    /// Envia uma mensagem do usuário pelo socket.
+    func send(_ text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, let task else { return }
+        messages.append(ChatMessage(role: .user, text: trimmed))
+        thinking = true
+
+        let payload: [String: Any] = ["type": "user", "text": trimmed]
+        guard let data = try? JSONSerialization.data(withJSONObject: payload),
+              let str = String(data: data, encoding: .utf8) else { return }
+        task.send(.string(str)) { [weak self] error in
+            if let error { Task { @MainActor in self?.fail(error.localizedDescription) } }
+        }
+    }
+
+    /// Fecha o socket.
+    func disconnect() {
+        task?.cancel(with: .normalClosure, reason: nil)
+        task = nil
+        connected = false
+        thinking = false
+    }
+
+    // MARK: - Interno
+
+    private func receive() {
+        task?.receive { [weak self] result in
+            guard let self else { return }
+            switch result {
+            case let .failure(error):
+                Task { @MainActor in self.fail(error.localizedDescription) }
+            case let .success(message):
+                Task { @MainActor in
+                    switch message {
+                    case let .string(text): self.handle(text)
+                    case let .data(data):
+                        if let text = String(data: data, encoding: .utf8) { self.handle(text) }
+                    @unknown default: break
+                    }
+                    self.receive()
+                }
+            }
+        }
+    }
+
+    private func handle(_ raw: String) {
+        guard let data = raw.data(using: .utf8),
+              let event = try? JSONDecoder().decode(ChatEvent.self, from: data) else { return }
+
+        switch event.type {
+        case "ready":
+            connected = true
+        case "text", "assistant", "delta":
+            appendAssistant(event.text ?? "")
+        case "tool":
+            let summary = event.summary ?? event.text ?? ""
+            messages.append(ChatMessage(role: .tool, text: summary, toolName: event.name))
+        case "error":
+            fail(event.text ?? event.summary ?? "Erro do assistente")
+        case "result", "done", "end":
+            thinking = false
+        default:
+            // Frames desconhecidos com texto: trata como saída do assistente.
+            if let text = event.text, !text.isEmpty { appendAssistant(text) }
+        }
+    }
+
+    /// Acrescenta ao último balão do assistente (streaming) ou cria um novo.
+    private func appendAssistant(_ chunk: String) {
+        guard !chunk.isEmpty else { return }
+        thinking = false
+        if let last = messages.last, last.role == .assistant {
+            messages[messages.count - 1].text += chunk
+        } else {
+            messages.append(ChatMessage(role: .assistant, text: chunk))
+        }
+    }
+
+    private func fail(_ message: String) {
+        thinking = false
+        messages.append(ChatMessage(role: .error, text: message))
     }
 }

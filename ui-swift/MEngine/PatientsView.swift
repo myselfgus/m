@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Detalhe do paciente (HealthOS — Pacientes): cabeçalho com nome de exibição +
 /// capsules, consultas agrupadas em C1/C2/C3 (cada uma com sua data) listando os
@@ -13,6 +14,13 @@ struct PatientDetailView: View {
     @State private var loading = false
     @State private var errorText: String?
     @State private var showProfileEditor = false
+
+    // Criação de consulta / documento.
+    @State private var showNewConsultation = false
+    /// Consulta-alvo da folha "Novo documento" (nil = folha fechada).
+    @State private var docTarget: Consultation?
+    /// Consulta-alvo do importador de arquivo (nil = importador fechado).
+    @State private var importTarget: Consultation?
 
     /// Rota de documento dentro de uma consulta.
     private struct DocRoute: Hashable {
@@ -41,6 +49,31 @@ struct PatientDetailView: View {
                 }
             }
         }
+        .sheet(isPresented: $showNewConsultation) {
+            NewConsultationView(slug: slug) { _ in
+                Task { await load() }
+            }
+        }
+        .sheet(item: $docTarget) { consultation in
+            NewDocumentView(slug: slug, consultationId: consultation.id) {
+                Task { await load() }
+            }
+        }
+        .fileImporter(isPresented: importerBinding, allowedContentTypes: importTypes) { result in
+            if case let .success(url) = result, let target = importTarget {
+                Task { await uploadFile(url, to: target) }
+            }
+            importTarget = nil
+        }
+    }
+
+    /// Binding booleano derivado de `importTarget` para o `.fileImporter`.
+    private var importerBinding: Binding<Bool> {
+        Binding(get: { importTarget != nil }, set: { if !$0 { importTarget = nil } })
+    }
+
+    private var importTypes: [UTType] {
+        [.plainText, .text, .pdf, .rtf, .audio, .movie, .image, .data]
     }
 
     // MARK: - Cabeçalho
@@ -66,6 +99,11 @@ struct PatientDetailView: View {
             }
             Spacer()
             VStack(spacing: 8) {
+                Button { showNewConsultation = true } label: {
+                    Label("Nova consulta", systemImage: "calendar.badge.plus")
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(HOS.blue)
                 Button { showProfileEditor = true } label: {
                     Label("Editar perfil", systemImage: "person.text.rectangle")
                 }
@@ -94,8 +132,17 @@ struct PatientDetailView: View {
             Spacer()
         } else if consultations.isEmpty {
             Spacer()
-            ContentUnavailableView("Sem consultas", systemImage: "calendar.badge.exclamationmark",
-                                   description: Text("Nenhuma consulta registrada para este paciente."))
+            ContentUnavailableView {
+                Label("Sem consultas", systemImage: "calendar.badge.exclamationmark")
+            } description: {
+                Text("Nenhuma consulta registrada para este paciente.")
+            } actions: {
+                Button { showNewConsultation = true } label: {
+                    Label("Nova consulta", systemImage: "calendar.badge.plus")
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(HOS.blue)
+            }
             Spacer()
         } else {
             ScrollView {
@@ -139,9 +186,32 @@ struct PatientDetailView: View {
                     }
                 }
             }
+
+            Divider().padding(.vertical, 2)
+            consultationActions(consultation)
+            PipelineControl(slug: slug, consultation: consultation) {
+                Task { await load() }
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .healthCard()
+    }
+
+    /// Ações por consulta: novo documento e importar arquivo.
+    private func consultationActions(_ consultation: Consultation) -> some View {
+        HStack(spacing: 10) {
+            Button { docTarget = consultation } label: {
+                Label("Novo documento", systemImage: "doc.badge.plus")
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            Button { importTarget = consultation } label: {
+                Label("Importar arquivo", systemImage: "square.and.arrow.down")
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            Spacer()
+        }
     }
 
     private func documentRow(_ name: String) -> some View {
@@ -204,6 +274,19 @@ struct PatientDetailView: View {
             errorText = error.localizedDescription
         }
     }
+
+    /// Sobe um arquivo arbitrário para uma consulta e recarrega a lista.
+    private func uploadFile(_ url: URL, to consultation: Consultation) async {
+        let accessing = url.startAccessingSecurityScopedResource()
+        defer { if accessing { url.stopAccessingSecurityScopedResource() } }
+        do {
+            _ = try await settings.makeClient()
+                .uploadFile(slug: slug, consultationId: consultation.id, fileURL: url)
+            await load()
+        } catch {
+            errorText = error.localizedDescription
+        }
+    }
 }
 
 /// Chips em fluxo (wrap) para tags/CID/medicamentos/tópicos.
@@ -217,6 +300,208 @@ struct FlowChips: View {
             ForEach(Array(items.enumerated()), id: \.offset) { _, it in
                 StatusPill(text: it, color: color, systemImage: symbol)
             }
+        }
+    }
+}
+
+// MARK: - Controle de pipeline por consulta
+
+/// Linha de disparo de stages do pipeline para uma consulta específica.
+/// Carrega os stages disponíveis (`GET /stages`, com fallback estático),
+/// permite escolher o modelo (cc / opus / sonnet, padrão cc) e dispara cada
+/// stage via `POST /jobs/{stage}`, acompanhando o job por polling (~2s) e
+/// exibindo o estado (na fila / processando / completo / erro) com StatusPill.
+struct PipelineControl: View {
+    @EnvironmentObject private var settings: AppSettings
+    let slug: String
+    let consultation: Consultation
+    /// Chamado quando um stage termina com sucesso (para recarregar documentos).
+    var onStageComplete: () -> Void = {}
+
+    /// Modelos oferecidos para os stages (rótulo curto → valor da API).
+    enum StageModel: String, CaseIterable, Identifiable {
+        case cc, opus, sonnet
+        var id: String { rawValue }
+        var apiValue: String { rawValue }
+        var label: String {
+            switch self {
+            case .cc: return "Claude Code"
+            case .opus: return "Opus"
+            case .sonnet: return "Sonnet"
+            }
+        }
+    }
+
+    /// Estado de execução de um stage (chave → fase atual).
+    enum Phase: Equatable { case idle, queued, running, done, failed }
+
+    /// Stages-padrão usados enquanto `GET /stages` não responde (ou falha).
+    private static let fallbackStages: [StageInfo] = [
+        .init(key: "transcribe", label: "Transcrição"),
+        .init(key: "normalize", label: "Normalização"),
+        .init(key: "asl", label: "ASL"),
+        .init(key: "dimensional", label: "VDLP"),
+        .init(key: "gem", label: "GEM"),
+        .init(key: "birp", label: "BIRP"),
+        .init(key: "soap_trajetorial", label: "SOAP trajetorial"),
+        .init(key: "soap_longitudinal", label: "SOAP longitudinal"),
+        .init(key: "pipeline", label: "Pipeline completo"),
+    ]
+
+    @State private var stages: [StageInfo] = []
+    @State private var model: StageModel = .cc
+    @State private var phases: [String: Phase] = [:]
+    @State private var errors: [String: String] = [:]
+    @State private var loadingStages = false
+
+    private var date: String { consultation.date ?? consultation.id }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                Label("Pipeline", systemImage: "wand.and.stars")
+                    .font(.hosHeadline).foregroundStyle(HOS.stProc)
+                Spacer()
+                Picker("Modelo", selection: $model) {
+                    ForEach(StageModel.allCases) { Text($0.label).tag($0) }
+                }
+                .pickerStyle(.menu)
+                .labelsHidden()
+                .frame(maxWidth: 140)
+            }
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(displayStages) { stage in
+                        stageButton(stage)
+                    }
+                }
+                .padding(.vertical, 2)
+            }
+        }
+        .task { await loadStages() }
+    }
+
+    private var displayStages: [StageInfo] {
+        stages.isEmpty ? Self.fallbackStages : stages
+    }
+
+    @ViewBuilder
+    private func stageButton(_ stage: StageInfo) -> some View {
+        let phase = phases[stage.key] ?? .idle
+        let tint = HOS.tint(forStage: stage.key)
+        VStack(spacing: 4) {
+            Button {
+                Task { await runStage(stage.key) }
+            } label: {
+                HStack(spacing: 5) {
+                    if phase == .queued || phase == .running {
+                        ProgressView().controlSize(.mini)
+                    } else {
+                        Image(systemName: phaseSymbol(phase, fallback: stageSymbol(stage.key)))
+                            .font(.system(size: 11, weight: .semibold))
+                    }
+                    Text(stage.label).font(.hosCaption)
+                }
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .tint(phaseTint(phase, base: tint))
+            .disabled(phase == .queued || phase == .running)
+
+            phasePill(stage.key, phase: phase)
+        }
+    }
+
+    @ViewBuilder
+    private func phasePill(_ key: String, phase: Phase) -> some View {
+        switch phase {
+        case .idle:
+            EmptyView()
+        case .queued:
+            StatusPill(text: "na fila", color: HOS.queued, systemImage: "clock")
+        case .running:
+            StatusPill(text: "processando", color: HOS.running, systemImage: "gearshape")
+        case .done:
+            StatusPill(text: "completo", color: HOS.complete, systemImage: "checkmark.seal.fill")
+        case .failed:
+            StatusPill(text: "erro", color: HOS.error, systemImage: "xmark.octagon.fill")
+                .help(errors[key] ?? "Falha no stage.")
+        }
+    }
+
+    private func phaseSymbol(_ phase: Phase, fallback: String) -> String {
+        switch phase {
+        case .done: return "checkmark"
+        case .failed: return "exclamationmark.triangle"
+        default: return fallback
+        }
+    }
+
+    private func phaseTint(_ phase: Phase, base: Color) -> Color {
+        switch phase {
+        case .done: return HOS.complete
+        case .failed: return HOS.error
+        case .queued, .running: return HOS.running
+        case .idle: return base
+        }
+    }
+
+    private func stageSymbol(_ key: String) -> String {
+        let k = key.lowercased()
+        if k == "pipeline" { return "play.fill" }
+        if k.contains("transcri") { return "waveform" }
+        if k.contains("normalize") { return "text.badge.checkmark" }
+        if k.contains("asl") { return "brain.head.profile" }
+        if k.contains("dimensional") || k.contains("vdlp") { return "chart.dots.scatter" }
+        if k.contains("gem") { return "point.3.connected.trianglepath.dotted" }
+        if k.contains("birp") { return "bolt.heart.fill" }
+        if k.contains("soap_long") { return "chart.line.uptrend.xyaxis" }
+        if k.contains("soap") { return "doc.text.fill" }
+        return "circle"
+    }
+
+    private func loadStages() async {
+        guard stages.isEmpty, !loadingStages else { return }
+        loadingStages = true
+        defer { loadingStages = false }
+        // Falha silenciosa: cai no fallback estático se /stages não existir ainda.
+        if let fetched = try? await settings.makeClient().fetchStages(), !fetched.isEmpty {
+            stages = fetched
+        }
+    }
+
+    private func runStage(_ stage: String) async {
+        phases[stage] = .queued
+        errors[stage] = nil
+        do {
+            let client = try settings.makeClient()
+            let job = try await client.enqueueStage(stage, slug: slug, date: date,
+                                                    model: model.apiValue, force: false)
+            try await poll(client: client, jobId: job.jobId, stage: stage)
+        } catch {
+            phases[stage] = .failed
+            errors[stage] = error.localizedDescription
+        }
+    }
+
+    /// Faz polling do job (~2s) até ficar pronto; atualiza a fase e, em sucesso,
+    /// notifica o pai para recarregar os documentos.
+    private func poll(client: APIClient, jobId: String, stage: String) async throws {
+        while true {
+            let st = try await client.jobStatus(jobId)
+            phases[stage] = st.ready ? phases[stage] : .running
+            if st.ready {
+                if st.successful == true {
+                    phases[stage] = .done
+                    onStageComplete()
+                } else {
+                    phases[stage] = .failed
+                    errors[stage] = st.error ?? "Job falhou."
+                }
+                return
+            }
+            try await Task.sleep(nanoseconds: 2_000_000_000)
         }
     }
 }
