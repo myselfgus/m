@@ -96,22 +96,64 @@ struct APIClient {
         try await send(makeRequest("jobs/\(jobId)"), as: JobStatus.self)
     }
 
-    func patients() async throws -> [String] {
+    // MARK: - Pacientes (modelo slug + nome)
+
+    /// Lista de pacientes: slug, nome de exibição e contagem de consultas.
+    func fetchPatients() async throws -> [Patient] {
         try await send(makeRequest("patients"), as: PatientsResponse.self).patients
     }
 
-    func documents(patientId: String) async throws -> [String] {
-        let path = "patients/\(patientId)/documents"
-        return try await send(makeRequest(path), as: DocumentsResponse.self).documents
+    /// Perfil editável do paciente (`/patients/{slug}/profile`).
+    func fetchProfile(slug: String) async throws -> PatientProfile {
+        let s = Self.escape(slug)
+        return try await send(makeRequest("patients/\(s)/profile"), as: PatientProfile.self)
     }
 
-    /// Conteúdo Markdown de um documento clínico (text/plain).
-    func document(patientId: String, name: String) async throws -> String {
-        let encoded = name.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? name
-        let req = makeRequest("patients/\(patientId)/documents/\(encoded)")
+    /// Atualiza o perfil (PUT com os campos editáveis) e devolve o perfil atualizado.
+    @discardableResult
+    func updateProfile(slug: String, profile: PatientProfile) async throws -> PatientProfile {
+        let s = Self.escape(slug)
+        var req = makeRequest("patients/\(s)/profile", method: "PUT")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try JSONSerialization.data(withJSONObject: profile.editablePayload())
+        return try await send(req, as: PatientProfile.self)
+    }
+
+    /// Consultas do paciente, agrupadas em C1/C2/C3… (`/patients/{slug}/consultations`).
+    func fetchConsultations(slug: String) async throws -> [Consultation] {
+        let s = Self.escape(slug)
+        let path = "patients/\(s)/consultations"
+        return try await send(makeRequest(path), as: ConsultationsResponse.self).consultations
+    }
+
+    /// Conteúdo Markdown de um documento de uma consulta (text/plain).
+    func fetchDocument(slug: String, consultationId: String, name: String) async throws -> String {
+        let s = Self.escape(slug)
+        let cid = Self.escape(consultationId)
+        let n = Self.escape(name)
+        let req = makeRequest("patients/\(s)/consultations/\(cid)/documents/\(n)")
         let (data, resp) = try await URLSession.shared.data(for: req)
         try Self.check(resp, data)
         return String(data: data, encoding: .utf8) ?? ""
+    }
+
+    /// Salva (PUT) o conteúdo Markdown de um documento de consulta.
+    @discardableResult
+    func saveDocument(slug: String, consultationId: String, name: String, content: String) async throws -> Int {
+        let s = Self.escape(slug)
+        let cid = Self.escape(consultationId)
+        let n = Self.escape(name)
+        var req = makeRequest("patients/\(s)/consultations/\(cid)/documents/\(n)", method: "PUT")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try JSONSerialization.data(withJSONObject: ["content": content])
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        try Self.check(resp, data)
+        let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+        return (obj?["bytes"] as? Int) ?? content.utf8.count
+    }
+
+    private static func escape(_ s: String) -> String {
+        s.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? s
     }
 
     /// Resumo do dossiê (`/patients/{id}/info`). Parse defensivo: tolera variações de schema.

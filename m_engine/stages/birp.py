@@ -26,8 +26,8 @@ decidir o gate, fazemos uma identificação LEVE e determinística ANTES do gate
   - nome a partir do conteúdo (heurística barata) ou do nome do arquivo;
   - resolve patient_id (find_existing_patient → senão seria um paciente novo, que
     por definição não tem BIRP anterior, então o gate nem se aplica).
-Se já existir `<PID>_BIRP_<date>_*.md` e force=False, retornamos o mais recente
-SEM chamar o LLM. Caso o gate não acerte o paciente (heurística falha), seguimos
+Se já existir o `C{n}/BIRP.md` da consulta (via store.birp_doc_path) e force=False,
+retornamos esse caminho SEM chamar o LLM. Caso o gate não acerte o paciente (heurística falha), seguimos
 o caminho normal: o LLM faz a identificação canônica e reprocessa — pior caso é
 uma regravação, nunca um dado errado. force=True sempre reprocessa.
 """
@@ -46,11 +46,11 @@ from m_engine.schemas.birp import BirpNote
 from m_engine.store import (
     birp_doc_path,
     birp_json_path,
+    consult_dir,
     ensure_dossier,
     extract_initials,
     find_existing_patient,
     generate_patient_id,
-    pat_dir,
     read_json,
     register_session,
     write_json,
@@ -77,11 +77,6 @@ _MAX_CHARS_PER_CHUNK = 120_000
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _timestamp() -> str:
-    """Timestamp do arquivo: ISO UTC sanitizado (sem ':'/'.'), até os segundos."""
-    return datetime.now(timezone.utc).isoformat().replace(":", "-").replace(".", "-")[:19]
 
 
 def _load_transcription(src_path: Path) -> str:
@@ -222,11 +217,12 @@ def run(transcription_json_path: str | Path, *, model: str | None = None, force:
         light_name = _light_patient_name(text, src_path)
         candidate_pid = find_existing_patient(light_name)
         if candidate_pid:
-            out_dir = pat_dir() / candidate_pid / "clinical-documents"
-            existing = sorted(out_dir.glob(f"{candidate_pid}_BIRP_{date}_*.md")) if out_dir.exists() else []
-            if existing:
-                log.info("birp_skip_cached", patient=candidate_pid, out=str(existing[-1]))
-                return existing[-1]
+            # Consulta já mapeada para esta data? (sem reservar pasta nova)
+            cdir = consult_dir(candidate_pid, date, create=False)
+            existing = cdir / "BIRP.md"
+            if existing.exists():
+                log.info("birp_skip_cached", patient=candidate_pid, out=str(existing))
+                return existing
 
     # --- EXTRAÇÃO via LLM (identificação canônica + seções + metadados) ---
     system = [SystemBlock(text=load_prompt("birp"), cache=True)]
@@ -254,15 +250,13 @@ def run(transcription_json_path: str | Path, *, model: str | None = None, force:
     # Re-checa o gate agora com o patient_id canônico (caso a heurística leve tenha
     # errado o paciente acima). Evita duplicar BIRP do mesmo dia sem force.
     if not force:
-        out_dir = pat_dir() / patient_id / "clinical-documents"
-        existing = sorted(out_dir.glob(f"{patient_id}_BIRP_{date}_*.md")) if out_dir.exists() else []
-        if existing:
-            log.info("birp_skip_cached_post", patient=patient_id, out=str(existing[-1]))
-            return existing[-1]
+        existing = birp_doc_path(patient_id, date)
+        if existing.exists():
+            log.info("birp_skip_cached_post", patient=patient_id, out=str(existing))
+            return existing
 
-    # --- GRAVAÇÃO: Markdown (com timestamp) + JSON estrutural ---
-    ts = _timestamp()
-    md_path = birp_doc_path(patient_id, date, ts)
+    # --- GRAVAÇÃO: Markdown (caminho fixo C{n}/BIRP.md) + JSON estrutural ---
+    md_path = birp_doc_path(patient_id, date)
     md_path.write_text(_assemble_markdown(note, date=date), encoding="utf-8")
 
     structural = {

@@ -6,7 +6,7 @@ struct HomeView: View {
     var onOpenPatient: (String) -> Void
     var onNova: () -> Void
 
-    @State private var patients: [String] = []
+    @State private var patients: [Patient] = []
     @State private var totalDocs = 0
     @State private var birpCount = 0
     @State private var soapCount = 0
@@ -60,14 +60,21 @@ struct HomeView: View {
                             .font(.hosFootnote).foregroundStyle(.secondary)
                     } else {
                         VStack(spacing: 8) {
-                            ForEach(patients, id: \.self) { pid in
-                                Button { onOpenPatient(pid) } label: {
+                            ForEach(patients) { patient in
+                                Button { onOpenPatient(patient.slug) } label: {
                                     HStack(spacing: 10) {
                                         Image(systemName: "person.crop.circle.fill")
                                             .font(.system(size: 24))
                                             .foregroundStyle(HOS.navy, HOS.blue.opacity(0.18))
-                                        Text(pid).font(.hosHeadline).foregroundStyle(.primary)
+                                        VStack(alignment: .leading, spacing: 1) {
+                                            Text(patient.displayName).font(.hosHeadline).foregroundStyle(.primary)
+                                            Text(patient.slug).font(.hosCaption).foregroundStyle(.secondary)
+                                        }
                                         Spacer()
+                                        StatusPill(
+                                            text: patient.consultationCount == 1 ? "1 consulta" : "\(patient.consultationCount) consultas",
+                                            color: HOS.info, systemImage: "calendar"
+                                        )
                                         Image(systemName: "chevron.right").foregroundStyle(.tertiary).font(.caption)
                                     }
                                     .healthCard(padding: 12)
@@ -91,18 +98,21 @@ struct HomeView: View {
         loading = true
         defer { loading = false }
         guard let client = try? settings.makeClient() else { return }
-        let pats = (try? await client.patients()) ?? []
+        let pats = (try? await client.fetchPatients()) ?? []
         patients = pats
 
         var docs = 0, birp = 0, soap = 0
         await withTaskGroup(of: [String].self) { group in
-            for pid in pats {
-                group.addTask { (try? await client.documents(patientId: pid)) ?? [] }
+            for p in pats {
+                group.addTask {
+                    let consultations = (try? await client.fetchConsultations(slug: p.slug)) ?? []
+                    return consultations.flatMap { $0.documents }
+                }
             }
             for await list in group {
                 docs += list.count
-                birp += list.filter { $0.contains("BIRP") }.count
-                soap += list.filter { $0.contains("SOAP") }.count
+                birp += list.filter { $0.localizedCaseInsensitiveContains("BIRP") }.count
+                soap += list.filter { $0.localizedCaseInsensitiveContains("SOAP") }.count
             }
         }
         totalDocs = docs; birpCount = birp; soapCount = soap

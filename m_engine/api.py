@@ -5,10 +5,17 @@ Camada de ORQUESTRAÇÃO apenas: enfileira jobs no Celery e consulta status.
 Nenhuma lógica de negócio — toda a computação vive nos stages (rodando no worker).
 
 Endpoints:
-  POST /jobs/{stage}   enfileira um stage e devolve o job_id
-  GET  /jobs/{job_id}  status/resultado via Celery AsyncResult
-  GET  /patients       lista os PATIENT_IDs (dossiês em pat/)
-  GET  /healthz        liveness simples
+  POST /jobs/{stage}                                   enfileira um stage e devolve o job_id
+  GET  /jobs/{job_id}                                  status/resultado via Celery AsyncResult
+  POST /audio                                          upload de áudio para $M_BASE/audio
+  GET  /patients                                       lista dossiês (slug + nome + nº consultas)
+  GET  /patients/{slug}/profile                        identidade editável (profile.json)
+  PUT  /patients/{slug}/profile                        merge de campos editáveis no profile.json
+  GET  /patients/{slug}/consultations                  consultas + documentos (.md) por consulta
+  GET  /patients/{slug}/consultations/{cid}/documents/{name}   conteúdo Markdown de um documento
+  PUT  /patients/{slug}/consultations/{cid}/documents/{name}   sobrescreve um documento Markdown
+  GET  /patients/{slug}/info                           visão mesclada (profile + index) [compat]
+  GET  /healthz                                        liveness simples
 """
 
 from __future__ import annotations
@@ -17,11 +24,12 @@ from pathlib import Path
 from typing import Optional
 
 from celery.result import AsyncResult
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import Body, FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
 
 from m_engine.config import get_settings
+from m_engine import store
 from m_engine.store import load_info, pat_dir
 from m_engine.tasks import STAGE_TASKS, celery_app
 
@@ -82,8 +90,55 @@ class JobStatus(BaseModel):
     error: Optional[str] = None
 
 
+class PatientSummary(BaseModel):
+    slug: str
+    display_name: str
+    consultation_count: int
+
+
 class PatientsResponse(BaseModel):
-    patients: list[str]
+    patients: list[PatientSummary]
+
+
+class ProfileUpdate(BaseModel):
+    """Campos editáveis de identidade. `slug` nunca é aceito (ignorado/strip)."""
+
+    display_name: Optional[str] = None
+    full_name: Optional[str] = None
+    cpf: Optional[str] = None
+    phone: Optional[str] = None
+    birthdate: Optional[str] = None
+    age: Optional[int] = None
+    email: Optional[str] = None
+    notes: Optional[str] = None
+    professional: Optional[dict] = None
+
+
+class ConsultationSummary(BaseModel):
+    id: Optional[str] = None
+    date: Optional[str] = None
+    source: Optional[str] = None
+    tags: Optional[list[str]] = None
+    processed_at: Optional[str] = None
+    documents: list[str] = Field(default_factory=list)
+
+
+class ConsultationsResponse(BaseModel):
+    slug: str
+    consultations: list[ConsultationSummary]
+
+
+class DocumentWriteResult(BaseModel):
+    ok: bool
+    bytes: int
+
+
+# Helper de segurança: confina um path sob pat_dir()/slug/... rejeitando traversal.
+def _patient_root(slug: str) -> Path:
+    safe_slug = Path(slug).name
+    if not safe_slug or safe_slug != slug:
+        raise HTTPException(400, "Slug inválido.")
+    return pat_dir() / safe_slug
 
 
 # ---------------------------------------------------------------------------
@@ -160,10 +215,89 @@ def get_job(job_id: str) -> JobStatus:
 
 @app.get("/patients", response_model=PatientsResponse)
 def list_patients() -> PatientsResponse:
-    """Lista os PATIENT_IDs com dossiê em pat/ (paths via store/config)."""
-    base = pat_dir()
-    patients = sorted(child.name for child in base.iterdir() if child.is_dir())
-    return PatientsResponse(patients=patients)
+    """Lista dossiês em pat/ com identidade resumida (slug + nome + nº de consultas)."""
+    return PatientsResponse(patients=[PatientSummary(**p) for p in store.list_patients()])
+
+
+@app.get("/patients/{slug}/profile")
+def get_profile(slug: str) -> dict:
+    """Retorna o profile.json (identidade editável) do paciente."""
+    root = _patient_root(slug)
+    if not (root / "profile.json").is_file():
+        raise HTTPException(404, f"profile.json ausente para {slug}")
+    return store.load_profile(slug)
+
+
+@app.put("/patients/{slug}/profile")
+def put_profile(slug: str, update: ProfileUpdate) -> dict:
+    """Merge dos campos editáveis no profile.json (slug nunca é alterado)."""
+    _patient_root(slug)  # valida o slug
+    existing = store.load_profile(slug)
+    if not existing:
+        raise HTTPException(404, f"profile.json ausente para {slug}")
+    patch = update.model_dump(exclude_unset=True)
+    patch.pop("slug", None)  # defensivo: nunca deixar o body trocar o slug
+    merged = {**existing, **patch}
+    store.save_profile(slug, merged)  # save_profile força slug=slug
+    return store.load_profile(slug)
+
+
+@app.get("/patients/{slug}/consultations", response_model=ConsultationsResponse)
+def list_consultations(slug: str) -> ConsultationsResponse:
+    """Lista as consultas do index.json, com os documentos (.md) de cada pasta C{n}/."""
+    root = _patient_root(slug)
+    if not root.is_dir():
+        raise HTTPException(404, f"Paciente não encontrado: {slug}")
+    idx = store.load_index(slug)
+    out: list[ConsultationSummary] = []
+    for c in idx.get("consultations", []):
+        cid = c.get("id")
+        docs: list[str] = []
+        if cid:
+            cdir = root / Path(str(cid)).name
+            if cdir.is_dir():
+                docs = sorted(p.name for p in cdir.glob("*.md"))
+        out.append(ConsultationSummary(
+            id=cid,
+            date=c.get("date"),
+            source=c.get("source"),
+            tags=c.get("tags"),
+            processed_at=c.get("processed_at"),
+            documents=docs,
+        ))
+    return ConsultationsResponse(slug=slug, consultations=out)
+
+
+def _consult_doc_path(slug: str, cid: str, name: str) -> Path:
+    """Resolve e valida pat/<slug>/<cid>/<name>.md, confinando sob pat_dir()/slug."""
+    root = _patient_root(slug)
+    safe_cid = Path(cid).name
+    safe_name = Path(name).name
+    if not safe_cid or safe_cid != cid:
+        raise HTTPException(400, "Id de consulta inválido.")
+    if not safe_name or Path(safe_name).suffix.lower() != ".md":
+        raise HTTPException(400, "Apenas documentos .md são permitidos.")
+    return root / safe_cid / safe_name
+
+
+@app.get("/patients/{slug}/consultations/{cid}/documents/{name}", response_class=PlainTextResponse)
+def get_consult_document(slug: str, cid: str, name: str) -> str:
+    """Retorna o conteúdo (Markdown) de um documento de uma consulta."""
+    path = _consult_doc_path(slug, cid, name)
+    if not path.is_file():
+        raise HTTPException(404, f"Documento não encontrado: {Path(name).name}")
+    return path.read_text(encoding="utf-8")
+
+
+@app.put("/patients/{slug}/consultations/{cid}/documents/{name}", response_model=DocumentWriteResult)
+def put_consult_document(slug: str, cid: str, name: str, content: str = Body(..., media_type="text/plain")) -> DocumentWriteResult:
+    """Sobrescreve um documento Markdown de uma consulta; só grava em C{n}/*.md."""
+    path = _consult_doc_path(slug, cid, name)
+    if not path.parent.is_dir():
+        raise HTTPException(404, f"Consulta não encontrada: {Path(cid).name}")
+    data = content.encode("utf-8")
+    path.write_bytes(data)
+    return DocumentWriteResult(ok=True, bytes=len(data))
 
 
 class UploadResponse(BaseModel):
@@ -194,37 +328,12 @@ async def upload_audio(file: UploadFile = File(...)) -> UploadResponse:
     return UploadResponse(filename=name, path=str(dest))
 
 
-class DocumentsResponse(BaseModel):
-    patient_id: str
-    documents: list[str]
-
-
-@app.get("/patients/{patient_id}/documents", response_model=DocumentsResponse)
-def list_documents(patient_id: str) -> DocumentsResponse:
-    """Lista os documentos clínicos (.md) gerados no dossiê do paciente."""
-    docs_dir = pat_dir() / patient_id / "clinical-documents"
-    if not docs_dir.is_dir():
-        raise HTTPException(404, f"Paciente sem documentos: {patient_id}")
-    docs = sorted(p.name for p in docs_dir.glob("*.md"))
-    return DocumentsResponse(patient_id=patient_id, documents=docs)
-
-
-@app.get("/patients/{patient_id}/documents/{name}", response_class=PlainTextResponse)
-def get_document(patient_id: str, name: str) -> str:
-    """Retorna o conteúdo (Markdown) de um documento clínico."""
-    safe = Path(name).name  # evita path traversal
-    path = pat_dir() / patient_id / "clinical-documents" / safe
-    if not path.is_file():
-        raise HTTPException(404, f"Documento não encontrado: {safe}")
-    return path.read_text(encoding="utf-8")
-
-
-@app.get("/patients/{patient_id}/info")
-def get_patient_info(patient_id: str) -> dict:
-    """Retorna o info.json do paciente (metadados + clinical_summary)."""
-    info = load_info(patient_id)
+@app.get("/patients/{slug}/info")
+def get_patient_info(slug: str) -> dict:
+    """Visão mesclada (profile + index) do paciente [compat]."""
+    info = load_info(slug)
     if not info:
-        raise HTTPException(404, f"info.json ausente para {patient_id}")
+        raise HTTPException(404, f"Dossiê ausente para {slug}")
     return info
 
 

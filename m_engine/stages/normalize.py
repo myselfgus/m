@@ -385,7 +385,8 @@ def run(transcription_json_path: str | Path, *, model: str | None = None, force:
     """
     Normaliza uma transcrição bruta e cria/atualiza o dossiê do paciente.
 
-    Retorna o caminho do <date>_transcription.json gravado no dossiê.
+    Retorna o caminho do transcription.json gravado na consulta do dossiê
+    (pat/<slug>/C{n}/transcription.json, via store.transcription_path).
     """
     # Default deste stage = Sonnet (ver config.STAGE_DEFAULTS). Override explícito vence.
     model = model or "sonnet"

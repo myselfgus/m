@@ -19,7 +19,8 @@ Pipeline (porte fiel do legado, com UMA mudança obrigatória):
   o modelo default do pipeline (Claude Opus 4.8) via providers.llm.complete.
   O parâmetro `model=None` resolve para o default em config.resolve_model.
 
-Saída: pat/<id>/clinical-documents/<PID>_SOAP_LONG_<range>_<ts>.md
+Saída: pat/<slug>/longitudinal/SOAP_longitudinal_<range>_<ts>.md
+(via store.longitudinal_dir).
 Idempotência: se já existir um documento para o mesmo range e force=False,
 retorna o caminho existente mais recente sem reprocessar.
 """
@@ -40,6 +41,7 @@ from m_engine.store import (
     ensure_dossier,
     gem_path,
     load_info,
+    longitudinal_dir,
     read_json,
     transcription_path,
 )
@@ -255,17 +257,16 @@ def _assemble_document(soa: str, plan: str, sessions: list[_Session], info: dict
 
 
 def _output_path(patient_id: str, sessions: list[_Session], ts: str) -> Path:
-    """Caminho de saída: <PID>_SOAP_LONG_<range>_<ts>.md em clinical-documents/."""
+    """Caminho de saída: SOAP_longitudinal_<range>_<ts>.md em pat/<slug>/longitudinal/."""
     rng = f"C{sessions[0].number}-C{sessions[-1].number}"
-    root = ensure_dossier(patient_id)
-    return root / "clinical-documents" / f"{patient_id}_SOAP_LONG_{rng}_{ts}.md"
+    return longitudinal_dir(patient_id) / f"SOAP_longitudinal_{rng}_{ts}.md"
 
 
 def _find_existing(patient_id: str, sessions: list[_Session]) -> Path | None:
     """Para idempotência: procura documento já gerado para o mesmo range."""
     rng = f"C{sessions[0].number}-C{sessions[-1].number}"
-    docs_dir = ensure_dossier(patient_id) / "clinical-documents"
-    prefix = f"{patient_id}_SOAP_LONG_{rng}_"
+    docs_dir = longitudinal_dir(patient_id)
+    prefix = f"SOAP_longitudinal_{rng}_"
     matches = sorted(p for p in docs_dir.glob(f"{prefix}*.md"))
     return matches[-1] if matches else None
 
@@ -287,11 +288,13 @@ def run(patient_id: str, dates: list[str], *, model: str | None = None, force: b
         force: se False e já existir documento para o range, retorna-o sem reprocessar.
 
     Returns:
-        Path do Markdown gerado em pat/<id>/clinical-documents/.
+        Path do Markdown gerado em pat/<slug>/longitudinal/.
     """
     model = model or "sonnet"
     if not (2 <= len(dates) <= 5):
         raise ValueError(f"SOAP Longitudinal requer 2 a 5 consultas; recebidas {len(dates)}.")
+
+    ensure_dossier(patient_id)
 
     # Carrega as sessões na ordem fornecida (C1 → Cn)
     sessions = [_load_session(patient_id, date, i + 1) for i, date in enumerate(dates)]

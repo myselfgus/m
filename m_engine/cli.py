@@ -146,9 +146,13 @@ def ingest(
     norm_path = normalize.run(transcription_json, model=model, force=force)
     _echo_path(norm_path)
     if deep:
-        # Deriva patient_id/date do artefato do dossiê: pat/<PID>/transcriptions/<date>_transcription.json
+        # Deriva patient_id do artefato do dossiê: pat/<slug>/C{n}/transcription.json
+        # (slug = parent.parent). A data é a usada pelo normalize (today()), que o
+        # store resolve internamente para a mesma consulta C{n}.
+        from m_engine.util import today
+
         patient_id = norm_path.parent.parent.name
-        date = norm_path.stem.replace("_transcription", "")
+        date = today()
         _echo_path(asl.run(patient_id, date, model=model, force=force))
         _echo_path(dimensional.run(patient_id, date, model=model, force=force))
         _echo_path(gem.run(patient_id, date, model=model, force=force))
@@ -281,21 +285,13 @@ def run_all(
 ) -> None:
     """Roda o pipeline analítico para TODAS as sessões transcritas do paciente."""
     from m_engine.stages import asl, dimensional, gem, soap_trajetorial
-    from m_engine.store import pat_dir
+    from m_engine.store import load_index
 
-    # Descobre as datas via diretório de transcrições do paciente (sem hardcode).
-    transcriptions = pat_dir() / patient_id / "transcriptions"
-    if not transcriptions.exists():
-        typer.echo(f"Sem transcrições para {patient_id} em {transcriptions}", err=True)
-        raise typer.Exit(code=1)
-
-    # Nome de arquivo: <DATE>_transcription.json -> extrai DATE.
-    dates = sorted(
-        p.name.removesuffix("_transcription.json")
-        for p in transcriptions.glob("*_transcription.json")
-    )
+    # Descobre as datas das consultas via index.json (fonte de verdade do store).
+    consultations = load_index(patient_id).get("consultations", [])
+    dates = sorted(c["date"] for c in consultations if c.get("date"))
     if not dates:
-        typer.echo(f"Nenhuma transcrição encontrada em {transcriptions}", err=True)
+        typer.echo(f"Nenhuma consulta registrada para {patient_id}", err=True)
         raise typer.Exit(code=1)
 
     for date in dates:

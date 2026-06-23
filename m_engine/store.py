@@ -1,21 +1,32 @@
 """
 M-Engine — Store de dossiês de pacientes (arquivos em volume).
 
-Estrutura por paciente em $M_BASE/pat/<PATIENT_ID>/:
-  transcriptions/        YYYY-MM-DD_transcription.json   (diálogo COMPLETO)
-  linguistic-analysis/   <PID>_<DATE>_ASL.json
-  dimensional-analysis/  <PID>_<DATE>_DIMENSIONAL.json
-  gem/                   <PID>_<DATE>_GEM.json           (naming unificado)
-  clinical-documents/    <PID>_SOAP_*_<ts>.md
-  info.json
+Modelo (jun/2026, redesign orientado a NOME + consultas):
 
-Naming de artefatos é centralizado aqui (resolve a inconsistência _GEM.json vs .gem.json do legado).
-PATIENT_ID = PAT_<INICIAIS>_<NN>.
+  pat/<slug>/
+    profile.json            identidade EDITÁVEL: nome completo/exibição, CPF, telefone, idade…
+    index.json              mantido pela máquina: consultas (C1/C2/C3…) + clinical_summary
+    C1/                     uma pasta por consulta (data nos metadados do index.json)
+      transcription.json
+      BIRP.md   BIRP.json
+      ASL.json  DIMENSIONAL.json  GEM.json
+      SOAP_trajetorial.md
+    C2/  …  C3/  …
+    longitudinal/           SOAP longitudinal (cobre várias consultas)
+
+Princípios:
+- `slug` é um identificador LEGÍVEL e ESTÁVEL derivado do nome na criação. Corrigir o
+  nome de exibição (profile.json) NÃO muda o slug nem quebra caminhos.
+- As funções de path mantêm a assinatura `(patient_id, date)` — `patient_id` agora é o
+  slug e o store resolve internamente a consulta `C{n}` pela data (mapa em index.json).
+  Isso mantém os stages do pipeline praticamente inalterados.
+- Naming de artefatos é centralizado aqui.
 """
 
 from __future__ import annotations
 
 import json
+import re
 import unicodedata
 from pathlib import Path
 
@@ -26,7 +37,7 @@ _CONNECTORS = {"E", "DE", "DA", "DO", "DAS", "DOS"}
 
 
 # ---------------------------------------------------------------------------
-# Identidade do paciente
+# Helpers de texto
 # ---------------------------------------------------------------------------
 
 
@@ -47,87 +58,270 @@ def normalize_name(name: str) -> str:
     return " ".join(_strip_accents(name).lower().split())
 
 
+def slugify(name: str) -> str:
+    """Slug legível: minúsculas, sem acento, palavras unidas por hífen."""
+    base = _strip_accents(name or "").lower()
+    base = re.sub(r"[^a-z0-9]+", "-", base).strip("-")
+    return base or "paciente"
+
+
 def pat_dir() -> Path:
     d = get_settings().pat_dir
     d.mkdir(parents=True, exist_ok=True)
     return d
 
 
+# ---------------------------------------------------------------------------
+# Identidade do paciente (slug + profile.json)
+# ---------------------------------------------------------------------------
+
+
+def generate_slug(patient_name: str) -> str:
+    """Slug único e estável a partir do nome; desambigua com sufixo -2, -3…"""
+    base = slugify(patient_name)
+    root = pat_dir()
+    if not (root / base).exists():
+        return base
+    n = 2
+    while (root / f"{base}-{n}").exists():
+        n += 1
+    return f"{base}-{n}"
+
+
+# Mantido para compatibilidade com call sites (birp/normalize): agora devolve um SLUG.
 def generate_patient_id(patient_name: str) -> str:
-    """PAT_<INICIAIS>_<NN> com NN sequencial sobre os dossiês existentes."""
-    prefix = f"PAT_{extract_initials(patient_name)}_"
-    max_n = 0
-    base = pat_dir()
-    for child in base.iterdir():
-        if child.is_dir() and child.name.startswith(prefix):
-            tail = child.name[len(prefix):]
-            if tail.isdigit():
-                max_n = max(max_n, int(tail))
-    return f"{prefix}{max_n + 1:02d}"
+    return generate_slug(patient_name)
 
 
-def find_existing_patient(patient_name: str) -> str | None:
-    """Retorna PATIENT_ID de dossiê existente com mesmo nome (normalizado), ou None."""
-    target = normalize_name(patient_name)
+def find_existing_patient(patient_name: str | None = None, *, cpf: str | None = None) -> str | None:
+    """
+    Resolve o slug de um dossiê existente por CPF (preferencial) ou nome normalizado.
+    Devolve o slug (nome do diretório) ou None.
+    """
+    target = normalize_name(patient_name) if patient_name else None
+    norm_cpf = re.sub(r"\D", "", cpf) if cpf else None
     for child in pat_dir().iterdir():
-        info = child / "info.json"
-        if not (child.is_dir() and info.exists()):
+        if not child.is_dir():
             continue
-        try:
-            data = json.loads(info.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
+        prof = load_profile(child.name)
+        if not prof:
             continue
-        if data.get("patient_name") and normalize_name(data["patient_name"]) == target:
+        if norm_cpf and re.sub(r"\D", "", str(prof.get("cpf") or "")) == norm_cpf:
+            return child.name
+        name = prof.get("full_name") or prof.get("display_name") or prof.get("patient_name")
+        if target and name and normalize_name(name) == target:
             return child.name
     return None
 
 
 # ---------------------------------------------------------------------------
-# Diretórios e caminhos de artefatos (naming unificado)
-# ---------------------------------------------------------------------------
-
-_SUBDIRS = ("transcriptions", "linguistic-analysis", "dimensional-analysis", "gem", "clinical-documents", "narrative")
-
-
-def ensure_dossier(patient_id: str) -> Path:
-    root = pat_dir() / patient_id
-    for sub in _SUBDIRS:
-        (root / sub).mkdir(parents=True, exist_ok=True)
-    return root
-
-
-def transcription_path(patient_id: str, date: str) -> Path:
-    return pat_dir() / patient_id / "transcriptions" / f"{date}_transcription.json"
-
-
-def asl_path(patient_id: str, date: str) -> Path:
-    return pat_dir() / patient_id / "linguistic-analysis" / f"{patient_id}_{date}_ASL.json"
-
-
-def dimensional_path(patient_id: str, date: str) -> Path:
-    return pat_dir() / patient_id / "dimensional-analysis" / f"{patient_id}_{date}_DIMENSIONAL.json"
-
-
-def gem_path(patient_id: str, date: str) -> Path:
-    # Convenção ÚNICA: <PID>_<DATE>_GEM.json (todos os stages usam esta)
-    return pat_dir() / patient_id / "gem" / f"{patient_id}_{date}_GEM.json"
-
-
-# ---------------------------------------------------------------------------
-# Metadados (info.json)
+# profile.json (identidade editável)
 # ---------------------------------------------------------------------------
 
 
-def load_info(patient_id: str) -> dict:
-    path = pat_dir() / patient_id / "info.json"
-    if path.exists():
-        return json.loads(path.read_text(encoding="utf-8"))
+def profile_path(slug: str) -> Path:
+    return pat_dir() / slug / "profile.json"
+
+
+def load_profile(slug: str) -> dict:
+    p = profile_path(slug)
+    if p.exists():
+        try:
+            return json.loads(p.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return {}
     return {}
 
 
-def save_info(patient_id: str, info: dict) -> None:
-    path = pat_dir() / patient_id / "info.json"
-    path.write_text(json.dumps(info, ensure_ascii=False, indent=2), encoding="utf-8")
+def save_profile(slug: str, profile: dict) -> None:
+    p = profile_path(slug)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    profile = {**profile, "slug": slug, "updated_at": now_iso()}
+    p.write_text(json.dumps(profile, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def ensure_profile(slug: str, *, patient_name: str | None = None, professional: dict | None = None) -> dict:
+    """Garante profile.json com a identidade mínima; não sobrescreve campos editados."""
+    prof = load_profile(slug)
+    if not prof:
+        prof = {
+            "slug": slug,
+            "display_name": patient_name or slug,
+            "full_name": patient_name or "",
+            "cpf": None,
+            "phone": None,
+            "birthdate": None,
+            "age": None,
+            "email": None,
+            "notes": None,
+            "professional": professional or {},
+            "created_at": now_iso(),
+        }
+        save_profile(slug, prof)
+    else:
+        changed = False
+        if patient_name and not prof.get("full_name"):
+            prof["full_name"] = patient_name
+            changed = True
+        if patient_name and not prof.get("display_name"):
+            prof["display_name"] = patient_name
+            changed = True
+        if professional and not prof.get("professional"):
+            prof["professional"] = professional
+            changed = True
+        if changed:
+            save_profile(slug, prof)
+    return prof
+
+
+# ---------------------------------------------------------------------------
+# index.json (consultas + clinical_summary; mantido pela máquina)
+# ---------------------------------------------------------------------------
+
+
+def index_path(slug: str) -> Path:
+    return pat_dir() / slug / "index.json"
+
+
+def load_index(slug: str) -> dict:
+    p = index_path(slug)
+    if p.exists():
+        try:
+            return json.loads(p.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            pass
+    return {"slug": slug, "consultations": [], "clinical_summary": None, "last_updated": None}
+
+
+def save_index(slug: str, index: dict) -> None:
+    p = index_path(slug)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    index = {**index, "slug": slug, "last_updated": now_iso()}
+    p.write_text(json.dumps(index, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+# load_info: visão mesclada (profile + index) — compat com API e stages SOAP.
+def load_info(slug: str) -> dict:
+    prof = load_profile(slug)
+    idx = load_index(slug)
+    if not prof and not idx.get("consultations"):
+        return {}
+    merged = {**prof}
+    merged["patient_id"] = slug
+    merged["patient_name"] = prof.get("display_name") or prof.get("full_name") or slug
+    merged["consultations"] = idx.get("consultations", [])
+    merged["sessions"] = idx.get("consultations", [])  # alias legado
+    merged["clinical_summary"] = idx.get("clinical_summary")
+    return merged
+
+
+def save_info(slug: str, info: dict) -> None:
+    """Compat: roteia campos de identidade ao profile e clínicos ao index."""
+    prof = load_profile(slug) or {}
+    for k in ("display_name", "full_name", "cpf", "phone", "birthdate", "age", "email", "notes", "professional"):
+        if k in info:
+            prof[k] = info[k]
+    if info.get("patient_name") and not info.get("display_name"):
+        prof["display_name"] = info["patient_name"]
+    save_profile(slug, prof)
+    if "clinical_summary" in info or "consultations" in info or "sessions" in info:
+        idx = load_index(slug)
+        if "clinical_summary" in info:
+            idx["clinical_summary"] = info["clinical_summary"]
+        if info.get("consultations") or info.get("sessions"):
+            idx["consultations"] = info.get("consultations") or info.get("sessions")
+        save_index(slug, idx)
+
+
+# ---------------------------------------------------------------------------
+# Consultas (C1/C2/C3…) — resolução data → pasta
+# ---------------------------------------------------------------------------
+
+
+def _consultations(idx: dict) -> list[dict]:
+    return idx.setdefault("consultations", [])
+
+
+def resolve_consult(slug: str, date: str, *, create: bool = True) -> str | None:
+    """
+    Mapeia uma data para a pasta de consulta `C{n}` (via index.json).
+    Ordinal por ordem de inserção; na migração as consultas entram em ordem de data,
+    então C1 = mais antiga. Se a data é nova e create=True, reserva o próximo C{n}.
+    """
+    idx = load_index(slug)
+    for c in _consultations(idx):
+        if c.get("date") == date:
+            return c.get("id")
+    if not create:
+        return None
+    cid = f"C{len(_consultations(idx)) + 1}"
+    _consultations(idx).append({"id": cid, "date": date})
+    save_index(slug, idx)
+    return cid
+
+
+def consult_dir(slug: str, date: str, *, create: bool = True) -> Path:
+    cid = resolve_consult(slug, date, create=create)
+    d = pat_dir() / slug / (cid or "C0")
+    if create:
+        d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def ensure_dossier(slug: str) -> Path:
+    """Garante pat/<slug>/ com profile.json + index.json (sem subdirs de tipo)."""
+    root = pat_dir() / slug
+    root.mkdir(parents=True, exist_ok=True)
+    ensure_profile(slug)
+    if not index_path(slug).exists():
+        save_index(slug, load_index(slug))
+    return root
+
+
+# ---------------------------------------------------------------------------
+# Caminhos de artefatos por consulta (assinaturas preservadas: slug, date)
+# ---------------------------------------------------------------------------
+
+
+def transcription_path(patient_id: str, date: str) -> Path:
+    return consult_dir(patient_id, date) / "transcription.json"
+
+
+def asl_path(patient_id: str, date: str) -> Path:
+    return consult_dir(patient_id, date) / "ASL.json"
+
+
+def dimensional_path(patient_id: str, date: str) -> Path:
+    return consult_dir(patient_id, date) / "DIMENSIONAL.json"
+
+
+def gem_path(patient_id: str, date: str) -> Path:
+    return consult_dir(patient_id, date) / "GEM.json"
+
+
+def birp_doc_path(patient_id: str, date: str, timestamp: str | None = None) -> Path:
+    """Nota BIRP em Markdown — uma por consulta, EDITÁVEL: C{n}/BIRP.md."""
+    return consult_dir(patient_id, date) / "BIRP.md"
+
+
+def birp_json_path(patient_id: str, date: str) -> Path:
+    """JSON estrutural do BIRP: C{n}/BIRP.json."""
+    return consult_dir(patient_id, date) / "BIRP.json"
+
+
+def soap_trajetorial_path(patient_id: str, date: str) -> Path:
+    return consult_dir(patient_id, date) / "SOAP_trajetorial.md"
+
+
+def longitudinal_dir(patient_id: str) -> Path:
+    d = pat_dir() / patient_id / "longitudinal"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+# ---------------------------------------------------------------------------
+# JSON helpers
+# ---------------------------------------------------------------------------
 
 
 def write_json(path: Path, payload: dict) -> None:
@@ -140,30 +334,14 @@ def read_json(path: Path) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# BIRP — paths de artefatos
-# ---------------------------------------------------------------------------
-
-
-def birp_doc_path(patient_id: str, date: str, timestamp: str) -> Path:
-    """Nota BIRP em Markdown: clinical-documents/<PID>_BIRP_<date>_<ts>.md."""
-    return pat_dir() / patient_id / "clinical-documents" / f"{patient_id}_BIRP_{date}_{timestamp}.md"
-
-
-def birp_json_path(patient_id: str, date: str) -> Path:
-    """JSON estrutural do BIRP (seções + metadados clínicos): clinical-documents/<PID>_<date>_BIRP.json."""
-    return pat_dir() / patient_id / "clinical-documents" / f"{patient_id}_{date}_BIRP.json"
-
-
-# ---------------------------------------------------------------------------
-# info.json — agregação de clinical_summary e registro de sessão
-# (portado de patient-utils.ts do legado)
+# clinical_summary — agregação por sessão (portado de patient-utils.ts)
 # ---------------------------------------------------------------------------
 
 
 def update_clinical_summary(summary: dict | None, clinical: dict, timestamp: str) -> dict:
     """
     Agrega metadados clínicos de uma sessão ao clinical_summary acumulado.
-    `clinical` aceita as chaves: icd_codes[], medications_mentioned[], topicos_principais[],
+    `clinical` aceita: icd_codes[], medications_mentioned[], topicos_principais[],
     clinical_context.encounter_type. Idempotente por código/nome/tópico/tipo.
     """
     s = summary or {
@@ -241,36 +419,52 @@ def register_session(
     clinical_metadata: dict | None = None,
 ) -> dict:
     """
-    Cria/atualiza o info.json do dossiê: garante identidade, registra a sessão
-    (dedupe por source_file) e agrega clinical_summary se metadados fornecidos.
+    Garante identidade (profile.json) e registra a consulta no index.json
+    (dedupe pela data; agrega clinical_summary se metadados fornecidos).
+    `patient_id` é o slug.
     """
-    info = load_info(patient_id) or {}
-    if not info:
-        info = {
-            "patient_id": patient_id,
-            "patient_name": patient_name,
-            "patient_initials": patient_initials,
-            "professional": professional or {},
-            "created_at": now_iso(),
-            "sessions": [],
-        }
-    else:
-        info.setdefault("sessions", [])
-        if patient_name:
-            info["patient_name"] = patient_name
-        if patient_initials:
-            info["patient_initials"] = patient_initials
-        if professional:
-            info["professional"] = professional
+    ensure_profile(patient_id, patient_name=patient_name, professional=professional)
 
-    src = session_entry.get("source_file")
-    info["sessions"] = [x for x in info["sessions"] if x.get("source_file") != src]
-    info["sessions"].append(session_entry)
+    idx = load_index(patient_id)
+    date = session_entry.get("date")
+    cid = resolve_consult(patient_id, date, create=True) if date else None
+    idx = load_index(patient_id)  # recarrega: resolve_consult pode ter persistido o C{n}
+
+    cons = _consultations(idx)
+    merged_entry = {"id": cid, **session_entry}
+    found = False
+    for i, c in enumerate(cons):
+        if (cid and c.get("id") == cid) or (date and c.get("date") == date):
+            cons[i] = {**c, **merged_entry}
+            found = True
+            break
+    if not found:
+        cons.append(merged_entry)
 
     if clinical_metadata:
         ts = session_entry.get("processed_at") or now_iso()
-        info["clinical_summary"] = update_clinical_summary(info.get("clinical_summary"), clinical_metadata, ts)
+        idx["clinical_summary"] = update_clinical_summary(idx.get("clinical_summary"), clinical_metadata, ts)
 
-    info["last_updated"] = now_iso()
-    save_info(patient_id, info)
-    return info
+    save_index(patient_id, idx)
+    return load_info(patient_id)
+
+
+# ---------------------------------------------------------------------------
+# Listagem (para a API)
+# ---------------------------------------------------------------------------
+
+
+def list_patients() -> list[dict]:
+    """Lista dossiês com identidade resumida (slug + nome de exibição + nº de consultas)."""
+    out: list[dict] = []
+    for child in sorted(pat_dir().iterdir(), key=lambda c: c.name):
+        if not child.is_dir():
+            continue
+        prof = load_profile(child.name)
+        idx = load_index(child.name)
+        out.append({
+            "slug": child.name,
+            "display_name": prof.get("display_name") or prof.get("full_name") or child.name,
+            "consultation_count": len(idx.get("consultations", [])),
+        })
+    return out

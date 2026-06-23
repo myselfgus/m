@@ -2,7 +2,8 @@
 Stage — SOAP Trajetorial (documentação clínica de PRIMEIRA CONSULTA, C1).
 
 Integra transcrição + ASL + VDLP (+ GEM opcional) do paciente/data e produz um
-documento SOAP+DAP em Markdown gravado em pat/<id>/clinical-documents/.
+documento SOAP+DAP em Markdown gravado em pat/<slug>/C{n}/SOAP_trajetorial.md
+(via store.soap_trajetorial_path).
 
 Estrutura (porte fiel do legado medscribe-soap-trajetorial.ts):
   - Bloco CLÍNICO  → seções S (Subjetivo), O (Objetivo), A (Avaliação)
@@ -34,6 +35,7 @@ from m_engine.store import (
     gem_path,
     load_info,
     read_json,
+    soap_trajetorial_path,
     transcription_path,
 )
 from m_engine.util import load_prompt
@@ -87,11 +89,6 @@ def prewarm_blocks() -> list[list["llm.SystemBlock"]]:
     """System prompts (clínico e plano) deste stage para pré-aquecer o cache."""
     clinico, plano = _split_system_prompts()
     return [[llm.SystemBlock(text=clinico, cache=True)], [llm.SystemBlock(text=plano, cache=True)]]
-
-
-def _timestamp() -> str:
-    """Timestamp do arquivo no padrão do legado: ISO sem ':'/'.' até os segundos."""
-    return datetime.now(timezone.utc).isoformat().replace(":", "-").replace(".", "-")[:19]
 
 
 # ---------------------------------------------------------------------------
@@ -258,26 +255,24 @@ def _assemble_document(
 
 def run(patient_id: str, date: str, *, model: str | None = None, force: bool = False) -> Path:
     """
-    Gera o SOAP Trajetorial (C1) e grava .md em clinical-documents/.
+    Gera o SOAP Trajetorial (C1) e grava em pat/<slug>/C{n}/SOAP_trajetorial.md.
 
     Inputs (do paciente/data via store): transcrição + ASL + VDLP + GEM (opcional).
     `model` é alias de config.MODELS; None → Sonnet (default deste stage, ver
     config.STAGE_DEFAULTS) para TODAS as seções (S, O, A, P). Override explícito vence.
     `force` regrava mesmo havendo output anterior.
 
-    Idempotência: como o nome do arquivo carrega timestamp, reusa o documento mais
-    recente existente quando force=False (não há reprocessamento desnecessário).
+    Idempotência: o documento mora em um caminho fixo por consulta
+    (store.soap_trajetorial_path); se já existir e force=False, reusa-o.
     """
     model = model or "sonnet"
-    root = ensure_dossier(patient_id)
-    out_dir = root / "clinical-documents"
+    ensure_dossier(patient_id)
+    out_path = soap_trajetorial_path(patient_id, date)
 
-    # Idempotência: já existe um SOAP_TRAJETORIAL gerado? Reusa o mais recente.
-    if not force:
-        existing = sorted(out_dir.glob(f"{patient_id}_SOAP_TRAJETORIAL_*.md"))
-        if existing:
-            log.info("skip_cached", patient=patient_id, out=str(existing[-1]))
-            return existing[-1]
+    # Idempotência: já existe o SOAP_trajetorial desta consulta? Reusa.
+    if not force and out_path.exists():
+        log.info("skip_cached", patient=patient_id, out=str(out_path))
+        return out_path
 
     # Inputs obrigatórios.
     tpath = transcription_path(patient_id, date)
@@ -321,7 +316,7 @@ def run(patient_id: str, date: str, *, model: str | None = None, force: bool = F
         clinical_analysis, therapeutic_plan, patient_info, professional_info, session_date
     )
 
-    out_path = out_dir / f"{patient_id}_SOAP_TRAJETORIAL_{_timestamp()}.md"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(document, encoding="utf-8")
     log.info("soap_trajetorial_done", patient=patient_id, out=str(out_path))
     return out_path

@@ -1,25 +1,28 @@
 import SwiftUI
 
-/// Destino de navegação da sidebar.
+/// Destino de navegação da sidebar. O paciente é referenciado pelo `slug`.
 enum Nav: Hashable {
     case home
     case nova
-    case patient(String)
+    case patient(String) // slug
 }
 
 /// Shell do dashboard HealthOS: NavigationSplitView (sidebar + detalhe).
 struct ContentView: View {
     @EnvironmentObject private var settings: AppSettings
     @State private var nav: Nav? = .home
-    @State private var patients: [String] = []
+    @State private var patients: [Patient] = []
     @State private var search = ""
     @State private var loading = false
     @State private var showSettings = false
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
 
-    private var filtered: [String] {
+    private var filtered: [Patient] {
         guard !search.isEmpty else { return patients }
-        return patients.filter { $0.localizedCaseInsensitiveContains(search) }
+        return patients.filter {
+            $0.displayName.localizedCaseInsensitiveContains(search)
+                || $0.slug.localizedCaseInsensitiveContains(search)
+        }
     }
 
     var body: some View {
@@ -49,8 +52,8 @@ struct ContentView: View {
                     Text(search.isEmpty ? "Nenhum paciente" : "Sem resultados")
                         .font(.hosFootnote).foregroundStyle(.secondary)
                 } else {
-                    ForEach(filtered, id: \.self) { pid in
-                        PatientRow(patientId: pid).tag(Nav.patient(pid))
+                    ForEach(filtered) { patient in
+                        PatientRow(patient: patient).tag(Nav.patient(patient.slug))
                     }
                 }
             } header: {
@@ -94,30 +97,31 @@ struct ContentView: View {
             HomeView(onOpenPatient: { nav = .patient($0) }, onNova: { nav = .nova })
         case .nova:
             NewSessionView()
-        case let .patient(pid):
-            PatientDetailView(patientId: pid)
-                .id(pid)
+        case let .patient(slug):
+            PatientDetailView(slug: slug)
+                .id(slug)
         }
     }
 
     private func loadPatients() async {
         loading = true
         defer { loading = false }
-        patients = (try? await settings.makeClient().patients()) ?? []
+        patients = (try? await settings.makeClient().fetchPatients()) ?? []
     }
 }
 
-/// Linha de paciente na sidebar (avatar + slug).
+/// Linha de paciente na sidebar: avatar + nome de exibição + nº de consultas.
 struct PatientRow: View {
-    let patientId: String
+    let patient: Patient
     var body: some View {
         HStack(spacing: 10) {
             Image(systemName: "person.crop.circle.fill")
                 .font(.system(size: 22))
                 .foregroundStyle(HOS.navy, HOS.blue.opacity(0.18))
             VStack(alignment: .leading, spacing: 1) {
-                Text(patientId).font(.hosHeadline).foregroundStyle(.primary).lineLimit(1)
-                Text("dossiê").font(.hosCaption).foregroundStyle(.secondary)
+                Text(patient.displayName).font(.hosHeadline).foregroundStyle(.primary).lineLimit(1)
+                Text(patient.consultationCount == 1 ? "1 consulta" : "\(patient.consultationCount) consultas")
+                    .font(.hosCaption).foregroundStyle(.secondary)
             }
         }
         .padding(.vertical, 2)
