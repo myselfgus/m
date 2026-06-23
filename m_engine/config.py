@@ -62,7 +62,15 @@ STAGE_DEFAULTS: dict[str, str] = {
 
 
 def stage_default_model(stage: str) -> str:
-    """Alias de modelo default para um stage (normalize/SOAPs → sonnet; resto → opus)."""
+    """Alias de modelo default para um stage.
+
+    Se `M_FORCE_MODEL` estiver setado (ex.: `cc`), TODOS os stages usam esse modelo
+    — útil em deploy que roda 100% na assinatura (Claude Code) sem crédito de API.
+    Caso contrário: normalize/SOAPs → sonnet; resto → opus.
+    """
+    forced = get_settings().m_force_model
+    if forced:
+        return forced
     return STAGE_DEFAULTS.get(stage, DEFAULT_MODEL_ALIAS)
 
 
@@ -82,6 +90,10 @@ class Settings(BaseSettings):
 
     # Modelo default (sobrescreve DEFAULT_MODEL_ALIAS se setado)
     m_default_model: str = DEFAULT_MODEL_ALIAS
+
+    # Força UM modelo em TODOS os stages (ignora STAGE_DEFAULTS). Ex.: "cc" para
+    # rodar 100% na assinatura Claude Code (sem crédito de API). None = comportamento normal.
+    m_force_model: str | None = None
 
     # Fila / API
     redis_url: str = "redis://localhost:6379/0"

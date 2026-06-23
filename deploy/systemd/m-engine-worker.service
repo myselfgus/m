@@ -1,7 +1,8 @@
-# M-Engine — worker Celery como serviço systemd.
+# M-Engine — worker Celery como serviço systemd (runtime no HOST).
 #
 # Pré-requisitos: mesmo usuário/venv/EnvironmentFile da API (ver m-engine-api.service)
-# e um Redis acessível via REDIS_URL.
+# e um Redis local (REDIS_URL=redis://localhost:6379/0). Roda como `ubuntu` para que o
+# provider "cc" use a auth da assinatura (Claude Code) sem crédito de API.
 #
 # Instalação:
 #   sudo cp deploy/systemd/m-engine-worker.service /etc/systemd/system/
@@ -15,27 +16,28 @@ Requires=redis-server.service
 
 [Service]
 Type=simple
-User=mengine
-Group=mengine
+User=ubuntu
+Group=ubuntu
 
-# Mesmas variáveis da API (chaves de provider, REDIS_URL, M_BASE).
+# Mesmas variáveis da API (ELEVENLABS_API_KEY, REDIS_URL, M_BASE, M_FORCE_MODEL, M_CLAUDE_CLI_BIN).
 EnvironmentFile=/etc/m-engine.env
 
 WorkingDirectory=/opt/m-engine
-ExecStart=/opt/m-engine/venv/bin/celery -A m_engine.tasks worker --loglevel=info --concurrency=2
+ExecStart=/home/ubuntu/m-venv/bin/celery -A m_engine.tasks worker --loglevel=info --concurrency=2
 
 Restart=always
 RestartSec=3
 # Encerramento gracioso: deixa a task em andamento terminar antes do SIGKILL.
-TimeoutStopSec=60
+TimeoutStopSec=120
 KillSignal=SIGTERM
 
 # --- Hardening (PHI) ---
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
-ProtectHome=true
-ReadWritePaths=/var/lib/m-engine
+# ProtectHome=false: venv + binário `claude` + auth (~/.claude) vivem em /home/ubuntu.
+ProtectHome=false
+ReadWritePaths=/var/lib/m-data
 ProtectKernelTunables=true
 ProtectControlGroups=true
 RestrictSUIDSGID=true

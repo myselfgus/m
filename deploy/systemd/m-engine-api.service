@@ -1,29 +1,30 @@
-# M-Engine — API FastAPI (uvicorn) como serviço systemd.
+# M-Engine — API FastAPI (uvicorn) como serviço systemd (runtime no HOST).
 #
-# Instalação (na VM de produção):
-#   sudo useradd --system --home /opt/m-engine --shell /usr/sbin/nologin mengine
-#   sudo mkdir -p /opt/m-engine && sudo chown mengine:mengine /opt/m-engine
-#   # crie o venv e instale: sudo -u mengine python3.11 -m venv /opt/m-engine/venv
-#   #                        sudo -u mengine /opt/m-engine/venv/bin/pip install /caminho/do/projeto
+# Roda como o usuário cuja sessão Claude Code está logada (ex.: `ubuntu`), para que o
+# provider "cc" reaproveite a auth do sistema (assinatura) sem crédito de API.
+#
+# Instalação (na VM):
+#   # venv já criado: /home/ubuntu/m-venv  (pip install /opt/m-engine)
 #   sudo cp deploy/systemd/m-engine-api.service /etc/systemd/system/
-#   sudo install -m 0600 -o mengine -g mengine .env /etc/m-engine.env   # segredos: 0600
+#   sudo install -m 0600 /etc/m-engine.env /etc/m-engine.env   # segredos 0600 (M_BASE, ELEVENLABS_API_KEY, M_FORCE_MODEL=cc, M_CLAUDE_CLI_BIN, M_API_HOST=<ip tailnet>, REDIS_URL)
 #   sudo systemctl daemon-reload && sudo systemctl enable --now m-engine-api
 
 [Unit]
 Description=M-Engine API (FastAPI/uvicorn)
-After=network-online.target redis-server.service
-Wants=network-online.target
+After=network-online.target redis-server.service tailscaled.service
+Wants=network-online.target tailscaled.service
 
 [Service]
 Type=simple
-User=mengine
-Group=mengine
+User=ubuntu
+Group=ubuntu
 
 # Segredos e config vêm exclusivamente do EnvironmentFile (modo 0600, fora do git).
 EnvironmentFile=/etc/m-engine.env
 
 WorkingDirectory=/opt/m-engine
-ExecStart=/opt/m-engine/venv/bin/uvicorn m_engine.api:app --host ${M_API_HOST} --port ${M_API_PORT}
+# Bind no IP da tailnet (M_API_HOST) — API privada. Restart cobre a corrida com o tailscaled.
+ExecStart=/home/ubuntu/m-venv/bin/uvicorn m_engine.api:app --host ${M_API_HOST} --port ${M_API_PORT}
 
 Restart=always
 RestartSec=3
@@ -32,9 +33,10 @@ RestartSec=3
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
-ProtectHome=true
-# Único caminho gravável: o volume de dados clínicos.
-ReadWritePaths=/var/lib/m-engine
+# ProtectHome=false: o venv, o binário `claude` e a auth (~/.claude) vivem em /home/ubuntu.
+ProtectHome=false
+# Único caminho gravável fora de /home: o volume de dados clínicos.
+ReadWritePaths=/var/lib/m-data
 ProtectKernelTunables=true
 ProtectControlGroups=true
 RestrictSUIDSGID=true
