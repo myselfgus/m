@@ -1,57 +1,66 @@
-# Deploy do M-Engine 24h na Magalu Cloud (VM + Docker Compose)
+# Deploy do M-Engine 24h na Magalu Cloud (VM + systemd + `cc`)
 
-Runbook para subir o M-Engine numa **Máquina Virtual** da Magalu Cloud, com dados num
-**Block Storage** cifrado, acesso **privado via Tailscale** e **backup** num **bucket Object Storage**.
+Runbook para rodar o M-Engine numa **Máquina Virtual** da Magalu Cloud, com dados num
+**Block Storage** cifrado, acesso **privado via Tailscale**, **backup** num **bucket Object Storage**
+nativo, e os LLMs servidos pela **assinatura Claude (Code) via `cc`** — sem crédito de API.
 
-> **Conceitos.** A *VM* roda os containers (compute, descartável). O *Block Storage* é um SSD
+> **Conceitos.** A *VM* roda os processos (compute, descartável). O *Block Storage* é um SSD
 > anexado à VM e montado como pasta (`/var/lib/m-data`) — guarda o estado clínico vivo (PHI). O
-> *Object Storage (bucket S3)* guarda backups/áudios frios. Se a VM morrer, recria-se sem perder dado:
-> o estado mora no volume, não na VM.
+> *Object Storage (bucket, protocolo S3 — produto nativo Magalu, não AWS)* guarda backups. Se a VM
+> morrer, recria-se sem perder dado: o estado mora no volume, não na VM.
+
+> **Por que systemd no host (e não Docker) aqui:** o provider `cc` roda `claude -p` reaproveitando a
+> **auth do sistema** (assinatura Max logada no host). Dentro de um container o `claude` e a auth não
+> existem, então o `cc` não funciona. Rodando como o usuário logado (`ubuntu`), o `cc` serve **todos
+> os stages** sem custo de API. (Docker Compose segue válido se você preferir usar **crédito de API**
+> — ver "Alternativa: Docker" no fim.)
 
 ```
-Mac / iPhone (app SwiftUI) ──Tailnet 100.x──▶ VM Magalu
-                                              ├─ docker compose: api :8000 · worker · redis
-                                              └─ /var/lib/m-data  (Block, LUKS)
+Mac / iPhone (app SwiftUI) ──Tailnet 100.x──▶ VM Magalu (Ubuntu)
+                                              ├─ systemd: m-engine-api (uvicorn) · m-engine-worker (celery) · redis
+                                              │     LLMs via `cc` (assinatura Claude, M_FORCE_MODEL=cc)
+                                              └─ /var/lib/m-data  (Block, cifrado pelo provider)
                                                  ├─ pat/    (dossiês PHI)
                                                  └─ audio/  (uploads + transcrições)
-                                                      └─rclone sync─▶ bucket m-backups (Object Storage)
+                                                      └─ mgc objects sync ─▶ bucket m-engine-backups
 ```
 
-Todos os comandos abaixo rodam **na VM** (via SSH / DesktopCommander), como root ou com `sudo`,
-salvo onde indicado.
+Comandos rodam **na VM** (SSH), salvo onde indicado. O usuário de serviço é **`ubuntu`** (onde a
+assinatura Claude está logada).
 
 ---
 
 ## 1. Provisionar recursos (`mgc` CLI ou painel)
 
-1. **VM**: a que você já tem. Recomendado **≥ 4 vCPU / 8 GB RAM**.
-2. **Block Storage** (volume cifrado, mesma AZ da VM) — via `mgc` no seu Mac/estação:
+1. **VM**: Ubuntu, **≥ 4 vCPU / 8 GB RAM**.
+2. **Block Storage** (volume cifrado, mesma AZ da VM) — via `mgc` na sua estação:
    ```bash
    VM=$(mgc virtual-machine instances list -o json | jq -r '.instances[0].id')   # ou copie o id
    mgc block-storage volumes create --name m-data --size 100 \
        --type.name cloud_nvme5k --availability-zone br-se1-a --encrypted
-   VOL=$(mgc block-storage volumes list -o json | jq -r '.volumes[] | select(.name=="m-data").id')
+   VOL=$(mgc block-storage volumes list -o json | jq -r '.volumes[]|select(.name=="m-data").id')
    mgc block-storage volumes attach --id "$VOL" --virtual-machine-id "$VM"
    ```
    O volume aparece na VM como novo disco (ex.: `/dev/vdb`, confirme com `lsblk`).
-3. **Object Storage**: o bucket é criado no §6 com o próprio `mgc` (nativo Magalu, **não é AWS** —
-   só fala o protocolo S3). Autenticação por **API key** do ID Magalu.
+3. **Object Storage**: o bucket é criado no §6 com o próprio `mgc` (nativo Magalu, **não é AWS**).
 
 ---
 
-## 2. Preparar a VM (SO + Docker)
+## 2. Preparar a VM (SO + deps + Claude Code)
 
 ```bash
 sudo apt update && sudo apt -y upgrade
-# Docker Engine + plugin compose (script oficial)
-curl -fsSL https://get.docker.com | sudo sh
-sudo apt -y install git
-sudo systemctl enable --now docker
+sudo apt -y install git python3-venv python3-pip redis-server
+sudo systemctl enable --now redis-server          # broker/result-backend local do Celery
+
+# Claude Code (provider cc) — instale como o usuário `ubuntu` (não root):
+curl -fsSL https://claude.ai/install.sh | bash     # instala em ~/.local/bin/claude
+claude auth login                                  # autentique na sua conta (assinatura Max)
+claude auth status                                 # confira loggedIn:true / subscriptionType
 ```
 
-> O **Block Storage** já é criado **cifrado em repouso** pelo provider (flag `--encrypted` no §1),
-> então não precisamos de LUKS — menos fragilidade no boot (sem keyfile/crypttab). Quem quiser uma
-> 2ª camada pode aplicar LUKS por cima; aqui usamos a cripto gerenciada da Magalu.
+> O **Block Storage** já é **cifrado em repouso** pelo provider (`--encrypted` no §1) — sem LUKS
+> (menos fragilidade no boot). Quem quiser uma 2ª camada pode aplicar LUKS por cima.
 
 ---
 
@@ -60,12 +69,12 @@ sudo systemctl enable --now docker
 ```bash
 lsblk                                    # o volume anexado aparece como novo disco (ex.: /dev/vdb)
 DEV=/dev/vdb
-sudo blkid "$DEV" || echo "vazio — ok p/ formatar"   # confirme que está VAZIO (não é o /dev/vda do SO!)
+sudo blkid "$DEV" || echo "vazio — ok p/ formatar"   # confirme VAZIO (não é o /dev/vda do SO!)
 
 sudo mkfs.ext4 -q -L m-data "$DEV"
 sudo mkdir -p /var/lib/m-data
 sudo mount "$DEV" /var/lib/m-data
-sudo chmod 770 /var/lib/m-data           # o container ajusta dono nos subdirs que cria
+sudo chown -R ubuntu:ubuntu /var/lib/m-data          # os serviços rodam como ubuntu
 
 # Remontar no boot via fstab (por UUID; nofail evita travar o boot se faltar)
 UUID=$(sudo blkid -s UUID -o value "$DEV")
@@ -79,129 +88,129 @@ sudo umount /var/lib/m-data && sudo mount -a && mountpoint /var/lib/m-data   # t
 
 ```bash
 curl -fsSL https://tailscale.com/install.sh | sudo sh
-sudo tailscale up                         # autentique a VM na sua tailnet
+sudo tailscale up                         # autentique a VM na sua tailnet (abra a URL no navegador)
 tailscale ip -4                           # anote o IP 100.x.y.z da VM
 ```
 
 - Instale o Tailscale também no **Mac** e no **iPhone** (mesma conta/tailnet).
-- **Firewall / Security Group da Magalu**: **não abra a porta 8000** para a internet. Deixe inbound
-  público só o necessário (idealmente nem SSH — use **Tailscale SSH**). O Tailscale não precisa de
-  porta inbound aberta.
+- **Firewall / Security Group da Magalu**: **não abra a porta 8000** para a internet. A API liga só no
+  IP da tailnet (abaixo). O Tailscale não precisa de porta inbound aberta.
 
 ---
 
-## 5. Subir o m-engine (Docker Compose)
+## 5. Subir o m-engine (host / systemd, rodando na assinatura `cc`)
 
 ```bash
+# código + venv (como ubuntu)
 sudo git clone https://github.com/myselfgus/m.git /opt/m-engine
-cd /opt/m-engine
+sudo chown -R ubuntu:ubuntu /opt/m-engine
+python3 -m venv /home/ubuntu/m-venv
+/home/ubuntu/m-venv/bin/pip install -U pip
+/home/ubuntu/m-venv/bin/pip install /opt/m-engine      # instala o pacote (CLI `m`, api, worker)
 
-# .env (NÃO vai ao git) — modo 0600
-sudo cp .env.example .env
-sudo nano .env        # preencha:
-#   ANTHROPIC_API_KEY=...
-#   ELEVENLABS_API_KEY=...
-#   M_BASE=/var/lib/m-data
-#   M_API_BIND=100.x.y.z        ← IP Tailscale da VM (publica a API só na tailnet)
-#   REDIS_URL fica interno (o compose já injeta redis://redis:6379/0)
-sudo chmod 600 .env
+# EnvironmentFile (segredos, 0600, root) — fonte única de config dos serviços
+sudo tee /etc/m-engine.env >/dev/null <<'ENV'
+M_BASE=/var/lib/m-data
+ELEVENLABS_API_KEY=__sua_chave__
+M_CLAUDE_CLI_BIN=/home/ubuntu/.local/bin/claude
+M_FORCE_MODEL=cc                 # força TODOS os stages na assinatura (sem crédito de API)
+REDIS_URL=redis://localhost:6379/0
+M_API_HOST=100.x.y.z             # IP da tailnet → API privada
+M_API_PORT=8000
+M_CACHE_TTL=1h
+ENV
+sudo chmod 600 /etc/m-engine.env
 
-# o compose interpola ${M_BASE} e ${M_API_BIND} do ambiente — exporte para o 'up'
-export M_BASE=/var/lib/m-data
-export M_API_BIND=100.x.y.z
-
-# valide a config antes de subir (confira o mapeamento de volume e a porta)
-sudo -E docker compose -f deploy/docker-compose.yml config
-
-# suba
-sudo -E docker compose -f deploy/docker-compose.yml up -d --build
+# serviços systemd (rodam como ubuntu; bind na tailnet; restart always)
+sudo cp deploy/systemd/m-engine-api.service deploy/systemd/m-engine-worker.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now m-engine-worker m-engine-api
 ```
 
-> **Auth de provider:** apenas **API keys** (VM headless). O alias `cc` (Claude Code CLI) fica de
-> fora — exigiria `claude` logado na VM.
+> **`M_FORCE_MODEL=cc`** faz `normalize`/`birp`/`asl`/`dimensional`/`gem`/`soap_*` usarem o `cc`
+> (assinatura). Sem essa var, cada stage usa seu default de API (sonnet/opus) — aí precisaria de
+> crédito Anthropic. O prewarm vira no-op com `cc` (sem chamadas/erros de crédito no boot).
 
 ---
 
 ## 6. Backup para o bucket (Object Storage nativo Magalu, via `mgc`)
 
-> O Object Storage é **produto nativo da Magalu** (br-se1). Usamos o **`mgc` CLI** —
-> sem AWS, sem rclone. O bucket e os dados ficam na Magalu.
-
-Instale e autentique o `mgc` **na VM** (headless, por API key):
+> O Object Storage é **produto nativo da Magalu** (br-se1) — sem AWS, sem rclone.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/MagaluCloud/mgccli/main/scripts/install.sh | sudo bash
-# Autenticação headless: gere uma API key no painel (ID Magalu → API keys) e configure:
-mgc auth api-key set            # cole a API key quando pedir  (ou: mgc workspace ...)
-mgc object-storage buckets list # deve responder sem erro
-```
-
-Crie o bucket (privado, versionado) — pode ser feito da VM ou do seu Mac:
-
-```bash
+# mgc na VM (binário nativo) + credencial de Object Storage (key pair estática)
+# (já costuma vir instalado; senão: curl -fsSL .../mgccli/.../install.sh | sudo bash)
+mgc object-storage api-key set --uuid <uuid-da-sua-key>   # mgc object-storage api-key list
 mgc object-storage buckets create --bucket m-engine-backups --private --enable-versioning
-```
 
-Teste e agende o `deploy/backup.sh` (usa `mgc object-storage objects sync`):
-
-```bash
-sudo M_BASE=/var/lib/m-data BUCKET=m-engine-backups /opt/m-engine/deploy/backup.sh
-
-# cron (root): backup noturno 03:30
+# cron (root): backup noturno 03:30 (replicar a credencial p/ /root/.config/mgc se rodar como root)
 echo '30 3 * * * root M_BASE=/var/lib/m-data BUCKET=m-engine-backups /opt/m-engine/deploy/backup.sh >> /var/log/m-backup.log 2>&1' | sudo tee /etc/cron.d/m-backup
+sudo M_BASE=/var/lib/m-data BUCKET=m-engine-backups /opt/m-engine/deploy/backup.sh   # dry run
 ```
 
-Confira os objetos: `mgc object-storage objects list --bucket m-engine-backups/pat`.
-
-Além disso, agende **snapshots do volume Block** no painel/`mgc` (ex.: 7 diários / 4 semanais) —
-defesa extra contra corrupção/ransomware. O volume já é **cifrado em repouso** (criado com `--encrypted`).
+Confira: `mgc object-storage objects list --bucket m-engine-backups/pat`. Agende também
+**snapshots do volume Block** no painel/`mgc` (defesa extra). O volume já é cifrado em repouso.
 
 ---
 
 ## 7. App SwiftUI
 
 - Em **Ajustes**, aponte a URL para `http://100.x.y.z:8000` (IP Tailscale da VM, ou o nome MagicDNS) e
-  use "Testar conexão".
-- O `Info.plist` já tem `NSAllowsLocalNetworking`. Se o iOS tratar o IP 100.x como remoto e bloquear,
-  adicione uma exceção `NSExceptionDomains` para o host tailnet (ou use o nome MagicDNS).
+  use "Testar conexão". No seletor de modelo, **Padrão** já roda via `cc` (por causa do `M_FORCE_MODEL`).
+- O `Info.plist` já tem `NSAllowsLocalNetworking`. Se o iOS bloquear o IP 100.x, adicione exceção
+  `NSExceptionDomains` para o host tailnet (ou use o nome MagicDNS).
 
 ---
 
 ## 8. Verificação (end-to-end)
 
 ```bash
-# 1) containers de pé e saudáveis; worker logou o prewarm do cache
-sudo docker compose -f /opt/m-engine/deploy/docker-compose.yml ps
-sudo docker compose -f /opt/m-engine/deploy/docker-compose.yml logs worker | grep -i prewarm
+# 1) serviços de pé; worker conectado ao redis + prewarm sem erro de crédito
+systemctl is-active redis-server m-engine-worker m-engine-api
+sudo journalctl -u m-engine-worker -n 20 --no-pager | grep -iE "ready|prewarm|connected"
 
-# 2) healthz local
-curl -fsS http://127.0.0.1:8000/healthz        # {"status":"ok","m_base":"/var/lib/m-engine"}
+# 2) healthz pela tailnet (do Mac); da internet pública deve FALHAR
+curl -fsS http://100.x.y.z:8000/healthz        # {"status":"ok","m_base":"/var/lib/m-data"}
 
-# 3) do Mac, pela tailnet (deve responder); da internet pública (deve falhar)
-curl -fsS http://100.x.y.z:8000/healthz
+# 3) pipeline real via API (caminho de produção): upload -> job -> polling
+curl -sS -F file=@sessao.m4a http://100.x.y.z:8000/audio
+curl -sS -X POST http://100.x.y.z:8000/jobs/pipeline -H 'content-type: application/json' \
+  -d '{"audio_path":"/var/lib/m-data/audio/sessao.m4a","deep":true}'
+# GET /jobs/<id> até ready; depois /patients e /patients/<id>/documents
 ```
 
-4. **Pipeline real**: `POST /audio` com um áudio de teste → `POST /jobs/pipeline` → `GET /jobs/{id}`
-   até concluir; confira artefatos em `/var/lib/m-data/pat/<PID>/` (BIRP + SOAP + JSONs).
-5. **Backup**: rode `backup.sh` e `mgc object-storage objects list --bucket m-engine-backups/pat`.
-6. **Resiliência**: `sudo reboot` → o volume remonta via `fstab` (cifrado pelo provider), os containers
-   sobem sozinhos (`restart: always`), os dados persistem e `/healthz` volta sem intervenção.
+4. **Backup**: `backup.sh` + `mgc object-storage objects list --bucket m-engine-backups/pat`.
+5. **Resiliência**: `sudo reboot` → volume remonta via `fstab`, serviços sobem sozinhos
+   (`restart=always`, `After=tailscaled`), dados persistem, `/healthz` volta sem intervenção.
 
 ---
 
 ## Operação do dia a dia
 
 ```bash
-cd /opt/m-engine
-sudo -E docker compose -f deploy/docker-compose.yml logs -f api worker   # logs
-sudo git pull && sudo -E docker compose -f deploy/docker-compose.yml up -d --build   # atualizar
-sudo -E docker compose -f deploy/docker-compose.yml down                 # parar (dados ficam no volume)
+sudo journalctl -u m-engine-api -u m-engine-worker -f          # logs
+# atualizar: git pull + reinstalar o pacote no venv + reiniciar
+cd /opt/m-engine && git pull && /home/ubuntu/m-venv/bin/pip install --force-reinstall --no-deps . \
+  && sudo systemctl restart m-engine-worker m-engine-api
+# renovar a sessão cc, se expirar:  claude auth login   (como ubuntu)
 ```
 
 ## Segurança (PHI) — checklist
 
-- [ ] API **não** exposta publicamente (Tailscale + security group fechado; `M_API_BIND` = IP tailnet).
-- [ ] Volume `/var/lib/m-data` cifrado (LUKS); keyfile `0400`.
-- [ ] `.env` `0600`, fora do git; chaves só em env.
-- [ ] Backups cifrados (rclone crypt ou SSE) + snapshots do volume.
-- [ ] Redis sem porta pública (já é interno à rede do compose).
+- [ ] API **não** exposta publicamente (Tailscale; uvicorn liga só em `M_API_HOST` = IP tailnet).
+- [ ] Volume `/var/lib/m-data` cifrado em repouso (provider `--encrypted`).
+- [ ] `/etc/m-engine.env` `0600` (segredos só aí); nada de chave no git.
+- [ ] Backups versionados no bucket privado + snapshots do volume.
+- [ ] Redis só em `localhost` (sem porta pública).
+- [ ] systemd hardening: `NoNewPrivileges`, `PrivateTmp`, `ProtectSystem=strict`, `ReadWritePaths=/var/lib/m-data`.
+
+---
+
+## Alternativa: Docker (usando crédito de API em vez de `cc`)
+
+Se preferir rodar em containers e **pagar API** (sem `cc`): mantenha `deploy/docker-compose.yml`
+(api + worker + redis), defina `M_BASE` e `M_API_BIND` (IP tailnet) e suba com
+`docker compose -f deploy/docker-compose.yml up -d --build`. Nesse modo o `cc` não funciona (o
+container não tem `claude`/auth), então use `ANTHROPIC_API_KEY` com crédito e **não** defina
+`M_FORCE_MODEL=cc`. Ajuste o dono do volume para o uid do container (`999`).
+```

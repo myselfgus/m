@@ -567,9 +567,11 @@ Unidades em `deploy/systemd/` (usuário `mengine`, `EnvironmentFile=/etc/m-engin
 
 Passo-a-passo completo em [`deploy/magalu.md`](deploy/magalu.md): **VM** (compute) + **Block Storage**
 cifrado pelo provider montado em `$M_BASE` (dossiês + áudio), acesso **privado via Tailscale** (API
-fora da internet pública via `M_API_BIND`) e **backup** para o **Object Storage nativo da Magalu**
-(`mgc object-storage objects sync` em `deploy/backup.sh` + cron). Separa **m-engine** (compute
-descartável) de **m-data** (estado no volume).
+liga só no IP da tailnet) e **backup** para o **Object Storage nativo da Magalu**
+(`mgc object-storage objects sync` em `deploy/backup.sh` + cron). Runtime padrão = **systemd no host**
+(uvicorn + Celery + Redis) com os LLMs servidos pela **assinatura via `cc`** (`M_FORCE_MODEL=cc`,
+sem crédito de API). Separa **m-engine** (compute descartável) de **m-data** (estado no volume).
+Quem preferir containers + crédito de API pode usar o `deploy/docker-compose.yml` (alternativa no runbook).
 
 ---
 
