@@ -182,8 +182,8 @@ extension View {
 
 struct HealthCard: ViewModifier {
     var padding: CGFloat = 14
-    var level: GlassLevel = .thick
-    var floating: Bool = true
+    var level: GlassLevel = .regular   // default leve; thick é opt-in p/ superfícies elevadas
+    var floating: Bool = false         // sombra sutil (card); floating só onde "flutua" de fato
     var tinted: Bool = false
 
     func body(content: Content) -> some View {
@@ -202,8 +202,9 @@ struct AnyViewModifier: ViewModifier {
 }
 
 extension View {
-    /// Card de vidro THICK + sombra FLOATING (default). Use `level`/`floating` para variar.
-    func healthCard(padding: CGFloat = 14, level: GlassLevel = .thick, floating: Bool = true, tinted: Bool = false) -> some View {
+    /// Card de vidro (default: regular + sombra sutil). Passe `level: .thick`/`floating: true`
+    /// só em superfícies que realmente flutuam (popovers, destaques).
+    func healthCard(padding: CGFloat = 14, level: GlassLevel = .regular, floating: Bool = false, tinted: Bool = false) -> some View {
         modifier(HealthCard(padding: padding, level: level, floating: floating, tinted: tinted))
     }
 }
@@ -279,42 +280,31 @@ struct ActionLabel: View {
     }
 }
 
-// MARK: - Marca connection-node (healthos-mark.svg) — desenhada nativamente
+// MARK: - Marca do app (logo M / AppIcon)
 
-/// Dois arcos (navy + azul) com 4 nós quadrados arredondados (N/S/L/O).
-/// Geometria fiel ao healthos-mark.svg (viewBox 100×100).
+/// Logo M do app (m-icon empacotado como AppIcon); fallback p/ SF Symbol.
 struct BrandMark: View {
     var size: CGFloat = 22
-
     var body: some View {
-        Canvas { ctx, sz in
-            let s = sz.width / 100
-            func P(_ x: CGFloat, _ y: CGFloat) -> CGPoint { CGPoint(x: x * s, y: y * s) }
-            let lw = 11 * s
-
-            var navy = Path()
-            navy.move(to: P(50, 20))
-            navy.addQuadCurve(to: P(19, 50), control: P(24, 30))
-            navy.addQuadCurve(to: P(50, 80), control: P(24, 70))
-            ctx.stroke(navy, with: .color(HOS.navy), style: StrokeStyle(lineWidth: lw, lineCap: .round))
-
-            var blue = Path()
-            blue.move(to: P(50, 20))
-            blue.addQuadCurve(to: P(81, 50), control: P(76, 30))
-            blue.addQuadCurve(to: P(50, 80), control: P(76, 70))
-            ctx.stroke(blue, with: .color(HOS.blue), style: StrokeStyle(lineWidth: lw, lineCap: .round))
-
-            func node(_ x: CGFloat, _ y: CGFloat, _ c: Color) {
-                let rect = CGRect(x: x * s, y: y * s, width: 15 * s, height: 15 * s)
-                ctx.fill(Path(roundedRect: rect, cornerRadius: 4.5 * s), with: .color(c))
+        Group {
+            #if os(macOS)
+            if let img = NSImage(named: "AppIcon") {
+                Image(nsImage: img).resizable()
+            } else {
+                Image(systemName: "waveform.circle.fill").resizable().foregroundStyle(HOS.blue)
             }
-            node(42.5, 11.5, HOS.blue)
-            node(42.5, 73.5, HOS.blueBright)
-            node(9, 42.5, HOS.navy)
-            node(76, 42.5, HOS.blue)
+            #else
+            if let ui = UIImage(named: "AppIcon") {
+                Image(uiImage: ui).resizable()
+            } else {
+                Image(systemName: "waveform.circle.fill").resizable().foregroundStyle(HOS.blue)
+            }
+            #endif
         }
+        .scaledToFit()
         .frame(width: size, height: size)
-        .accessibilityLabel("HealthOS")
+        .clipShape(RoundedRectangle(cornerRadius: size * 0.22, style: .continuous))
+        .accessibilityLabel("M-Engine")
     }
 }
 

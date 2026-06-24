@@ -19,7 +19,7 @@ struct AssistantChatView: View {
             Divider()
             inputBar
         }
-        .background(.thickMaterial)
+        .background(.regularMaterial)
         .task { startSession() }
         .onDisappear { live?.disconnect() }
     }
