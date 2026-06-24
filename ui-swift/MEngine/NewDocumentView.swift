@@ -44,7 +44,7 @@ struct NewDocumentView: View {
                     .font(.hosMono)
                     .scrollContentBackground(.hidden)
                     .padding(12)
-                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: HOS.rXl, style: .continuous))
+                    .recessedField(cornerRadius: HOS.rXl)
                     .frame(minHeight: 220)
             }
 

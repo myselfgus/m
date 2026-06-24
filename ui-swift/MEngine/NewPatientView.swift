@@ -47,7 +47,7 @@ struct NewPatientView: View {
                             .frame(minHeight: 80)
                             .scrollContentBackground(.hidden)
                             .padding(8)
-                            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: HOS.rLg, style: .continuous))
+                            .recessedField(cornerRadius: HOS.rLg)
                     }
                 }
                 .healthCard()

@@ -128,9 +128,33 @@ struct CardShadow: ViewModifier {
     }
 }
 
+struct ModalShadow: ViewModifier {
+    // --shadow-modal: sheets / modais (elevação máxima)
+    func body(content: Content) -> some View {
+        content
+            .shadow(color: .black.opacity(0.24), radius: 32, x: 0, y: 24)
+            .shadow(color: .black.opacity(0.08), radius: 6, x: 0, y: 4)
+    }
+}
+
+/// Campo "recessed" (input/well): afunda abaixo dos cards — sem sombra de elevação,
+/// preenchimento sutil + hairline. Cria o degrau mais baixo da hierarquia.
+struct RecessedField: ViewModifier {
+    var cornerRadius: CGFloat = HOS.rMd
+    func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        content
+            .background(.quaternary, in: shape)
+            .overlay(shape.strokeBorder(HOS.divider, lineWidth: 1))
+    }
+}
+
 extension View {
     func floatingShadow() -> some View { modifier(FloatingShadow()) }
     func cardShadow() -> some View { modifier(CardShadow()) }
+    func modalShadow() -> some View { modifier(ModalShadow()) }
+    /// Superfície recessed para campos/wells.
+    func recessedField(cornerRadius: CGFloat = HOS.rMd) -> some View { modifier(RecessedField(cornerRadius: cornerRadius)) }
 }
 
 // MARK: - Superfície de vidro (Liquid Glass: thin / regular / THICK)
@@ -202,10 +226,20 @@ struct AnyViewModifier: ViewModifier {
 }
 
 extension View {
-    /// Card de vidro (default: regular + sombra sutil). Passe `level: .thick`/`floating: true`
-    /// só em superfícies que realmente flutuam (popovers, destaques).
+    /// Card de vidro (default: regular + sombra sutil — nível RESTING).
     func healthCard(padding: CGFloat = 14, level: GlassLevel = .regular, floating: Bool = false, tinted: Bool = false) -> some View {
         modifier(HealthCard(padding: padding, level: level, floating: floating, tinted: tinted))
+    }
+
+    /// Nível RAISED — thick + floating. Use em popovers, item selecionado/destaque.
+    func raisedCard(padding: CGFloat = 14, tinted: Bool = false) -> some View {
+        modifier(HealthCard(padding: padding, level: .thick, floating: true, tinted: tinted))
+    }
+
+    /// Nível OVERLAY — thick + sombra modal. Use no container de sheets/modais.
+    func overlaySurface(padding: CGFloat = 0) -> some View {
+        modifier(HealthCard(padding: padding, level: .thick, floating: false))
+            .modalShadow()
     }
 }
 

@@ -591,7 +591,7 @@ struct DocumentEditorView: View {
                     .font(.hosMono)
                     .scrollContentBackground(.hidden)
                     .padding(16)
-                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: HOS.rXl, style: .continuous))
+                    .recessedField(cornerRadius: HOS.rXl)
                     .padding(24)
                     .frame(maxWidth: 820)
                     .frame(maxWidth: .infinity)
