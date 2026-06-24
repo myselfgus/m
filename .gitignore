@@ -13,7 +13,12 @@ debug_*.json
 
 # SwiftUI app — artefatos de build (não versionar binários)
 ui-swift/.build/
+ui-swift/build/
 *.app/
+
+# Projeto iOS GERADO pelo xcodegen (fonte de verdade: project.yml)
+ui-swift/*.xcodeproj/
+ui-swift/MEngine/Info-iOS.plist
 
 # config de launch local (paths absolutos da máquina)
 .claude/

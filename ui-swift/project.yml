@@ -1,0 +1,74 @@
+# Projeto Xcode do target iOS (iPhone/iPad) do M-Engine.
+#
+# Reaproveita EXATAMENTE os mesmos fontes SwiftUI de MEngine/ que rodam no macOS
+# (via SwiftPM em Package.swift). O código já é cross-platform: todos os pontos
+# específicos de plataforma estão sob #if os(iOS) / #if os(macOS).
+#
+# O Info.plist do iOS é GERADO pelo xcodegen a partir de `info.properties` abaixo
+# (não edite MEngine/Info-iOS.plist à mão — ele é sobrescrito a cada `xcodegen generate`).
+#
+# Gerar/atualizar:   cd ui-swift && xcodegen generate
+# Abrir no Xcode:    open MEngine-iOS.xcodeproj
+# Build simulador:   xcodebuild -project MEngine-iOS.xcodeproj -scheme MEngine \
+#                      -destination 'generic/platform=iOS Simulator' build
+name: MEngine-iOS
+options:
+  bundleIdPrefix: com.voither
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+
+targets:
+  MEngine:
+    type: application
+    platform: iOS
+    sources:
+      - path: MEngine
+        # Recursos do macOS / plists não entram na compilação iOS.
+        excludes:
+          - "Info.plist"
+          - "Info-iOS.plist"
+          - "AppIcon.icns"
+    info:
+      path: MEngine/Info-iOS.plist
+      properties:
+        CFBundleName: M-Engine
+        CFBundleDisplayName: M-Engine
+        CFBundleShortVersionString: "0.1.0"
+        CFBundleVersion: "1"
+        LSRequiresIPhoneOS: true
+        UILaunchScreen: {}
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: true
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        NSMicrophoneUsageDescription: "Gravação de áudio das sessões clínicas para transcrição."
+        # iOS 14+: descoberta na rede local exige permissão. A tailnet usa IP 100.x
+        # roteado pelo Tailscale (não multicast/bonjour), então não é estritamente
+        # necessária — incluída por robustez caso aponte p/ MagicDNS local.
+        NSLocalNetworkUsageDescription: "Conexão com a API M-Engine na sua rede privada Tailscale."
+        # MESMA REGRA ATS DO APP macOS: somente NSAllowsArbitraryLoads, SEM
+        # NSAllowsLocalNetworking — sua presença faz o iOS 10+ IGNORAR o
+        # NSAllowsArbitraryLoads e reativar o ATS (erro -1022) no HTTP texto-puro da tailnet.
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.voither.mengine
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        TARGETED_DEVICE_FAMILY: "1,2"    # iPhone + iPad
+        SWIFT_VERSION: "5.9"
+        GENERATE_INFOPLIST_FILE: NO
+        ENABLE_PREVIEWS: YES
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon   # ícone do app (Assets.xcassets/AppIcon.appiconset, da assets/m-icon.jpg)
+        # Sem time de assinatura definido: simulador builda sem assinar.
+        # Para device físico, abra no Xcode e selecione seu Team em Signing.
+        CODE_SIGN_STYLE: Automatic
