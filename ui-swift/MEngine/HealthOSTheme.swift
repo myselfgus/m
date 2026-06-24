@@ -165,6 +165,31 @@ struct StatCard: View {
     }
 }
 
+// MARK: - Action label (icon-only no iOS, texto+ícone no macOS)
+
+/// Rótulo padrão de botão de ação. No iOS renderiza SOMENTE o ícone para
+/// economizar viewport (o texto vira `accessibilityLabel` p/ VoiceOver); no
+/// macOS, onde há espaço, mantém texto + ícone. Use no lugar de `Label(...)`
+/// dentro de `Button { } label:` para que a regra de plataforma fique num só lugar.
+struct ActionLabel: View {
+    let title: String
+    let systemImage: String
+
+    init(_ title: String, systemImage: String) {
+        self.title = title
+        self.systemImage = systemImage
+    }
+
+    var body: some View {
+        #if os(iOS)
+        Image(systemName: systemImage)
+            .accessibilityLabel(title)
+        #else
+        Label(title, systemImage: systemImage)
+        #endif
+    }
+}
+
 // MARK: - Brand mark (mantém o m-icon do app)
 
 struct BrandMark: View {

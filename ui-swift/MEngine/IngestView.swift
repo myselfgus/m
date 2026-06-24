@@ -75,8 +75,8 @@ struct NewSessionView: View {
                 Button {
                     Task { recorder.isRecording ? stopRecording() : await recorder.start() }
                 } label: {
-                    Label(recorder.isRecording ? "Parar" : "Gravar",
-                          systemImage: recorder.isRecording ? "stop.circle.fill" : "record.circle")
+                    ActionLabel(recorder.isRecording ? "Parar" : "Gravar",
+                                systemImage: recorder.isRecording ? "stop.circle.fill" : "record.circle")
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(recorder.isRecording ? HOS.error : HOS.blue)
@@ -98,7 +98,7 @@ struct NewSessionView: View {
         VStack(alignment: .leading, spacing: 12) {
             Label("Arquivo", systemImage: "folder.fill").font(.hosTitle3).foregroundStyle(HOS.stStt)
             HStack {
-                Button { showImporter = true } label: { Label("Selecionar áudio…", systemImage: "doc.badge.plus") }
+                Button { showImporter = true } label: { ActionLabel("Selecionar áudio…", systemImage: "doc.badge.plus") }
                     .buttonStyle(.bordered)
                 Spacer()
                 if let activeAudio {
@@ -135,7 +135,7 @@ struct NewSessionView: View {
         Button {
             Task { await process() }
         } label: {
-            Label("Enviar e processar", systemImage: "paperplane.fill")
+            ActionLabel("Enviar e processar", systemImage: "paperplane.fill")
                 .frame(maxWidth: .infinity)
         }
         .buttonStyle(.borderedProminent)

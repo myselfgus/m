@@ -1,22 +1,27 @@
 """
-M-Engine — Assistente clínico agêntico (Claude Code CLI em streaming).
+M-Engine — Assistente clínico agêntico (Claude Sonnet 4.6 via Anthropic API).
 
-Spawna o CLI Claude Code em modo STREAMING bidirecional (stream-json em ambas as
-direções), reaproveitando a AUTH DO SISTEMA (sessão logada / OAuth / keychain) —
-igual a `providers.llm._complete_claude_cli`, sem API key direta.
+Diferente da versão antiga (subprocesso do CLI Claude Code, efêmero e por paciente),
+esta é UMA conversa GERAL e PERSISTENTE:
 
-Diferente do provider de completion (one-shot `-p --output-format json`), aqui a
-sessão é LONGA e INTERATIVA: o cliente WebSocket envia mensagens de usuário e
-recebe, em tempo real, texto do assistente, eventos de uso de ferramenta e o
-resultado de cada turno. É FULL AGENTIC (bypassPermissions, aprovado): o agente
-tem shell + acesso a arquivos confinado ao workspace de dados (M_BASE) e pode
-rodar os stages do pipeline via o CLI `m`.
+  - Modelo: claude-sonnet-4-6 (janela de 1M de contexto) via Anthropic API.
+  - Estado: o transcript vive no servidor em `M_BASE/assistant/general.json`
+    (lista de mensagens no formato da Messages API). Sobrevive a reconexões,
+    background do app e reinício do processo.
+  - Agêntico: loop manual de tool-use com ferramentas confinadas a M_BASE
+    (`bash`, `read_file`, `write_file`) — o assistente lê dossiês de pacientes,
+    roda o CLI `m` (pipeline) e inspeciona arquivos, tudo dentro do workspace.
+  - A execução do turno NÃO está atrelada ao WebSocket: quando o app vai a
+    segundo plano e o socket cai, o turno continua e é persistido; ao reconectar,
+    o histórico é reproduzido.
 
-Protocolo do CLI (verificado contra `claude --help` / execução real, v2.1.x):
-  - Entrada  : --input-format stream-json  → JSONL de mensagens de usuário no stdin
-               {"type":"user","message":{"role":"user","content":"..."}}
-  - Saída    : --output-format stream-json --verbose → JSONL de eventos no stdout
-               system/init, assistant (text|tool_use), result, ...
+Frames emitidos ao cliente (compatíveis com o front atual):
+  {"type":"history","role":"user"|"assistant","text":...}  (replay ao conectar)
+  {"type":"ready"}
+  {"type":"assistant","text":"..."}      (delta de texto em streaming)
+  {"type":"tool","name":"bash","summary":"..."}
+  {"type":"result"}                       (turno concluído)
+  {"type":"error","message":"..."}
 """
 
 from __future__ import annotations
@@ -25,7 +30,7 @@ import asyncio
 import json
 import os
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Awaitable, Callable
 
 import structlog
 
@@ -33,242 +38,375 @@ from m_engine.config import get_settings
 
 log = structlog.get_logger("m_engine.assistant")
 
+MODEL = "claude-sonnet-4-6"
+MAX_TOKENS = 8000
+BASH_TIMEOUT = 120  # s
+MAX_TOOL_OUTPUT = 20000  # chars devolvidos ao modelo por chamada de ferramenta
 
-# Prompt de sistema (PT-BR) — anexado ao default do Claude Code via --append-system-prompt.
-def _system_prompt(slug: Optional[str]) -> str:
-    base = get_settings().m_base
-    pat = base / "pat"
-    focus = ""
-    if slug:
-        safe = Path(slug).name
-        focus = (
-            f"\n\nContexto da sessão: o usuário está focado no paciente cujo slug é "
-            f"`{safe}`. O dossiê dele fica em `{pat / safe}`. Comece por aí quando "
-            f"a pergunta for sobre 'este paciente'."
-        )
-    return (
-        "Você é o assistente clínico do M-Engine, operando dentro do servidor (VM) do "
-        "Dr. Gustavo. Você tem acesso a shell e arquivos, CONFINADO ao workspace de dados.\n\n"
-        f"- Os dossiês dos pacientes ficam em `{pat}/<slug>/` (profile.json, index.json, "
-        "e uma pasta por consulta C1/C2/... com transcription.json, ASL.json, "
-        "DIMENSIONAL.json, GEM.json, BIRP.md, SOAP_trajetorial.md).\n"
-        "- Use o CLI `m` (já no PATH) para rodar stages do pipeline "
-        "(transcribe, normalize, asl, dimensional, gem, birp, soap). Rode `m --help` se "
-        "tiver dúvida sobre subcomandos.\n"
-        "- Responda SEMPRE em português do Brasil, de forma concisa e clínica.\n"
-        "- TODO o conteúdo é PHI (dado de saúde sensível). NÃO copie dados de paciente "
-        "para fora da VM, não os exponha em texto desnecessário e não acesse nada fora "
-        f"de `{base}`.\n"
-        "- Antes de ações destrutivas (apagar/sobrescrever), confirme o que vai fazer no "
-        "texto da resposta." + focus
+EmitFn = Callable[[dict], Awaitable[None]]
+
+
+# ---------------------------------------------------------------------------
+# Persistência do transcript
+# ---------------------------------------------------------------------------
+def _assistant_dir() -> Path:
+    d = get_settings().m_base / "assistant"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _transcript_path() -> Path:
+    return _assistant_dir() / "general.json"
+
+
+def _professional_path() -> Path:
+    return get_settings().m_base / "professional.json"
+
+
+def load_transcript() -> list[dict]:
+    p = _transcript_path()
+    if p.is_file():
+        try:
+            return json.loads(p.read_text("utf-8"))
+        except Exception:  # noqa: BLE001
+            return []
+    return []
+
+
+def save_transcript(messages: list[dict]) -> None:
+    _transcript_path().write_text(
+        json.dumps(messages, ensure_ascii=False, indent=0), "utf-8"
     )
 
 
-def _build_cmd(slug: Optional[str]) -> list[str]:
-    """Monta o comando do CLI Claude Code em modo streaming bidirecional."""
-    settings = get_settings()
-    # M_FORCE_MODEL pode trazer um alias de stage ("cc"); para o chat queremos um alias
-    # real de modelo. Se for "cc" ou vazio, cai para "opus".
-    forced = (settings.m_force_model or "").strip().lower()
-    model = forced if forced and forced != "cc" else "opus"
-    return [
-        settings.m_claude_cli_bin,
-        "-p",
-        "--input-format", "stream-json",
-        "--output-format", "stream-json",
-        "--verbose",  # obrigatório com --output-format stream-json em -p
-        "--model", model,
-        "--permission-mode", "bypassPermissions",
-        "--add-dir", str(settings.m_base),
-        "--append-system-prompt", _system_prompt(slug),
-    ]
+def _professional_context() -> str:
+    """Bloco de contexto com o perfil do profissional (professional.json), se houver."""
+    p = _professional_path()
+    if not p.is_file():
+        return ""
+    try:
+        prof = json.loads(p.read_text("utf-8"))
+    except Exception:  # noqa: BLE001
+        return ""
+    if not isinstance(prof, dict) or not prof:
+        return ""
+    parts = []
+    for key, label in (
+        ("name", "Nome"),
+        ("specialty", "Especialidade"),
+        ("registration", "Registro (CRM/RQE)"),
+        ("clinic", "Clínica/Instituição"),
+        ("notes", "Observações"),
+    ):
+        val = prof.get(key)
+        if val:
+            parts.append(f"  - {label}: {val}")
+    if not parts:
+        return ""
+    return "\n\nPerfil do profissional (use como contexto de quem você assiste):\n" + "\n".join(parts)
 
 
-def _venv_path_env() -> dict[str, str]:
-    """env com o PATH incluindo o bin do venv (para o CLI `m` ser chamável)."""
-    env = os.environ.copy()
-    # Diretório do venv que roda este processo (sys.executable). Garante que `m`,
-    # instalado como console_script do projeto, esteja no PATH do agente.
-    import sys
-
-    venv_bin = str(Path(sys.executable).parent)
-    current = env.get("PATH", "")
-    if venv_bin and venv_bin not in current.split(os.pathsep):
-        env["PATH"] = venv_bin + os.pathsep + current
-    return env
-
-
-class AssistantSession:
-    """
-    Sessão de chat agêntico ligada a um subprocesso do CLI Claude Code.
-
-    Uso:
-        sess = AssistantSession(slug="fulano-de-tal")
-        await sess.start()
-        await sess.send_user("Resuma a última consulta deste paciente")
-        async for frame in sess.events():   # frames normalizados (dict)
-            ...
-        await sess.close()
-    """
-
-    def __init__(self, slug: Optional[str] = None, *, workspace: Optional[Path] = None) -> None:
-        self.slug = slug
-        # cwd da sessão: por padrão, a raiz de dados (assim caminhos relativos do
-        # agente caem dentro de M_BASE). Permite override em testes.
-        self.workspace = workspace or get_settings().m_base
-        self.proc: Optional[asyncio.subprocess.Process] = None
-
-    async def start(self) -> None:
-        cmd = _build_cmd(self.slug)
-        self.workspace.mkdir(parents=True, exist_ok=True)
-        log.info("assistant_start", slug=self.slug, bin=cmd[0], workspace=str(self.workspace))
-        self.proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            cwd=str(self.workspace),
-            env=_venv_path_env(),
-        )
-
-    async def send_user(self, text: str) -> None:
-        """Escreve uma mensagem de usuário no stdin como JSONL stream-json."""
-        if not self.proc or not self.proc.stdin:
-            raise RuntimeError("Sessão do assistente não iniciada.")
-        msg = {"type": "user", "message": {"role": "user", "content": text}}
-        line = (json.dumps(msg, ensure_ascii=False) + "\n").encode("utf-8")
-        self.proc.stdin.write(line)
-        await self.proc.stdin.drain()
-
-    async def read_events(self, on_frame: Callable[[dict], Any]) -> None:
-        """
-        Lê o stdout (JSONL) do CLI, NORMALIZA cada evento e chama on_frame(frame).
-        on_frame pode ser sync ou async. Termina quando o stdout fecha (EOF).
-        """
-        if not self.proc or not self.proc.stdout:
-            raise RuntimeError("Sessão do assistente não iniciada.")
-        async for raw in self.proc.stdout:
-            line = raw.decode("utf-8", errors="replace").strip()
-            if not line:
-                continue
-            try:
-                event = json.loads(line)
-            except json.JSONDecodeError:
-                continue  # ignora ruído não-JSON
-            for frame in normalize_event(event):
-                res = on_frame(frame)
-                if asyncio.iscoroutine(res):
-                    await res
-
-    async def stderr_text(self) -> str:
-        if not self.proc or not self.proc.stderr:
-            return ""
-        data = await self.proc.stderr.read()
-        return data.decode("utf-8", errors="replace")
-
-    async def close(self) -> None:
-        """Encerra o subprocesso (fecha stdin, termina, aguarda, mata se preciso)."""
-        proc = self.proc
-        if not proc:
-            return
-        try:
-            if proc.stdin and not proc.stdin.is_closing():
-                proc.stdin.close()
-        except Exception:
-            pass
-        if proc.returncode is None:
-            try:
-                proc.terminate()
-            except ProcessLookupError:
-                return
-            try:
-                await asyncio.wait_for(proc.wait(), timeout=5.0)
-            except asyncio.TimeoutError:
-                try:
-                    proc.kill()
-                except ProcessLookupError:
-                    pass
-                await proc.wait()
-        log.info("assistant_closed", slug=self.slug, returncode=proc.returncode)
+# ---------------------------------------------------------------------------
+# Prompt de sistema + ferramentas
+# ---------------------------------------------------------------------------
+def _system_prompt() -> str:
+    base = get_settings().m_base
+    pat = base / "pat"
+    return (
+        "Você é o assistente clínico GERAL do M-Engine, operando dentro do servidor "
+        "(VM) do Dr. Gustavo. Tem acesso a shell e arquivos CONFINADO ao workspace de "
+        f"dados em `{base}`.\n\n"
+        f"- Os dossiês dos pacientes ficam em `{pat}/<slug>/` (profile.json, index.json, "
+        "e uma pasta por consulta C1/C2/... com transcription.json, ASL.json, "
+        "DIMENSIONAL.json, GEM.json, BIRP.md, SOAP_trajetorial.md).\n"
+        "- Use a ferramenta `bash` para listar/inspecionar arquivos e para rodar o CLI "
+        "`m` (já no PATH) nos stages do pipeline (transcribe, normalize, asl, dimensional, "
+        "gem, birp, soap). Rode `m --help` em caso de dúvida.\n"
+        "- Use `read_file` para ler um arquivo e `write_file` para escrever (caminhos "
+        f"relativos a `{base}`).\n"
+        "- Esta é uma conversa geral e contínua (não está presa a um paciente). Quando o "
+        "usuário citar um paciente, descubra o slug listando `pat/`.\n"
+        "- Responda SEMPRE em português do Brasil, de forma concisa e clínica.\n"
+        "- TODO o conteúdo é PHI (dado de saúde sensível). NÃO exponha dados além do "
+        f"necessário e não acesse nada fora de `{base}`.\n"
+        "- Antes de ações destrutivas (apagar/sobrescrever), confirme no texto da resposta."
+        + _professional_context()
+    )
 
 
-def _summarize_tool(name: str, tool_input: dict | None) -> str:
-    """Resumo curto e legível de um tool_use (esconde o schema cru do cliente)."""
-    ti = tool_input or {}
-    if name in ("Bash",) and ti.get("command"):
-        return str(ti["command"])[:200]
-    if name in ("Read", "Write", "Edit") and ti.get("file_path"):
-        return str(ti["file_path"])
-    if name == "Glob" and ti.get("pattern"):
-        return str(ti["pattern"])
-    if name == "Grep" and ti.get("pattern"):
-        return str(ti["pattern"])
-    if name == "Skill" and ti.get("skill"):
-        return str(ti["skill"])
-    # Fallback: primeiro valor string curto do input, se houver.
+TOOLS: list[dict] = [
+    {
+        "name": "bash",
+        "description": (
+            "Executa um comando de shell no diretório de dados (M_BASE). Use para listar "
+            "arquivos (ls, find), inspecionar conteúdo (cat, grep) e rodar o CLI `m`."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "command": {"type": "string", "description": "Comando bash a executar."}
+            },
+            "required": ["command"],
+        },
+    },
+    {
+        "name": "read_file",
+        "description": "Lê um arquivo de texto (caminho relativo a M_BASE) e devolve o conteúdo.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Caminho relativo a M_BASE."}
+            },
+            "required": ["path"],
+        },
+    },
+    {
+        "name": "write_file",
+        "description": "Escreve (cria/sobrescreve) um arquivo de texto (caminho relativo a M_BASE).",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Caminho relativo a M_BASE."},
+                "content": {"type": "string", "description": "Conteúdo a gravar."},
+            },
+            "required": ["path", "content"],
+        },
+    },
+]
+
+
+def _summarize_tool(name: str, ti: dict) -> str:
+    ti = ti or {}
+    if name == "bash":
+        return str(ti.get("command", ""))[:200]
+    if name in ("read_file", "write_file"):
+        return str(ti.get("path", ""))
     for v in ti.values():
         if isinstance(v, str) and v:
             return v[:200]
     return ""
 
 
-def normalize_event(event: dict) -> list[dict]:
+# ---------------------------------------------------------------------------
+# Execução das ferramentas (confinada a M_BASE)
+# ---------------------------------------------------------------------------
+def _resolve_in_base(rel: str) -> Path:
+    base = get_settings().m_base.resolve()
+    target = (base / rel).resolve()
+    if base != target and base not in target.parents:
+        raise ValueError(f"Caminho fora do workspace permitido: {rel}")
+    return target
+
+
+def _venv_path_env() -> dict[str, str]:
+    """env com o bin do venv no PATH (para o CLI `m` ser chamável)."""
+    import sys
+
+    env = os.environ.copy()
+    venv_bin = str(Path(sys.executable).parent)
+    cur = env.get("PATH", "")
+    if venv_bin and venv_bin not in cur.split(os.pathsep):
+        env["PATH"] = venv_bin + os.pathsep + cur
+    return env
+
+
+async def _exec_tool(name: str, ti: dict) -> tuple[str, bool]:
+    """Executa uma ferramenta e devolve (conteúdo, is_error)."""
+    base = get_settings().m_base
+    try:
+        if name == "bash":
+            cmd = (ti or {}).get("command", "")
+            if not cmd:
+                return ("comando vazio", True)
+            proc = await asyncio.create_subprocess_shell(
+                cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                cwd=str(base),
+                env=_venv_path_env(),
+            )
+            try:
+                out, _ = await asyncio.wait_for(proc.communicate(), timeout=BASH_TIMEOUT)
+            except asyncio.TimeoutError:
+                proc.kill()
+                return (f"[timeout após {BASH_TIMEOUT}s]", True)
+            text = out.decode("utf-8", "replace")
+            if len(text) > MAX_TOOL_OUTPUT:
+                text = text[:MAX_TOOL_OUTPUT] + "\n[...saída truncada...]"
+            return (text or "(sem saída)", proc.returncode != 0)
+
+        if name == "read_file":
+            path = _resolve_in_base((ti or {}).get("path", ""))
+            if not path.is_file():
+                return (f"arquivo inexistente: {ti.get('path')}", True)
+            text = path.read_text("utf-8", "replace")
+            if len(text) > MAX_TOOL_OUTPUT:
+                text = text[:MAX_TOOL_OUTPUT] + "\n[...truncado...]"
+            return (text, False)
+
+        if name == "write_file":
+            path = _resolve_in_base((ti or {}).get("path", ""))
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text((ti or {}).get("content", ""), "utf-8")
+            return (f"gravado: {ti.get('path')}", False)
+
+        return (f"ferramenta desconhecida: {name}", True)
+    except Exception as exc:  # noqa: BLE001
+        return (f"erro ao executar {name}: {exc}", True)
+
+
+# ---------------------------------------------------------------------------
+# Sessão geral (singleton)
+# ---------------------------------------------------------------------------
+class GeneralAssistant:
     """
-    Converte UM evento nativo do CLI (stream-json) em zero+ frames COMPACTOS para
-    o cliente. Esconde os internos; o frontend não precisa parsear o schema do CLI.
-
-    Frames de saída:
-      {"type":"ready"}                              (system/init)
-      {"type":"assistant","text": "..."}            (texto do assistente)
-      {"type":"tool","name":"Bash","summary":"..."} (uso de ferramenta)
-      {"type":"result","text":"...","usage":{...}}  (turno concluído)
-      {"type":"error","message":"..."}              (falha)
+    Conversa geral única e persistente. Compartilhada entre conexões/dispositivos.
+    Um turno por vez (lock). O turno roda como task de fundo e transmite frames
+    para todos os assinantes (WebSockets); se nenhum estiver conectado, o turno
+    continua e é persistido mesmo assim.
     """
-    etype = event.get("type")
-    frames: list[dict] = []
 
-    if etype == "system" and event.get("subtype") == "init":
-        frames.append({"type": "ready", "model": event.get("model")})
+    def __init__(self) -> None:
+        self.messages: list[dict] = load_transcript()
+        self.subscribers: set[asyncio.Queue] = set()
+        self._lock = asyncio.Lock()
+        self._client = None  # AsyncAnthropic, lazy
+
+    def _anthropic(self):
+        if self._client is None:
+            import anthropic
+
+            key = get_settings().anthropic_api_key
+            if not key:
+                raise RuntimeError("ANTHROPIC_API_KEY ausente — configure no servidor.")
+            self._client = anthropic.AsyncAnthropic(api_key=key)
+        return self._client
+
+    # -- assinaturas (WebSockets) -------------------------------------------
+    def subscribe(self) -> asyncio.Queue:
+        q: asyncio.Queue = asyncio.Queue()
+        self.subscribers.add(q)
+        return q
+
+    def unsubscribe(self, q: asyncio.Queue) -> None:
+        self.subscribers.discard(q)
+
+    async def _broadcast(self, frame: dict) -> None:
+        for q in list(self.subscribers):
+            try:
+                q.put_nowait(frame)
+            except Exception:  # noqa: BLE001
+                pass
+
+    # -- replay de histórico ao conectar ------------------------------------
+    def history_frames(self) -> list[dict]:
+        frames: list[dict] = []
+        for msg in self.messages:
+            role = msg.get("role")
+            content = msg.get("content")
+            text = _extract_text(content)
+            if not text:
+                continue
+            if role == "user":
+                frames.append({"type": "history", "role": "user", "text": text})
+            elif role == "assistant":
+                frames.append({"type": "history", "role": "assistant", "text": text})
         return frames
 
-    if etype == "assistant":
-        content = (event.get("message") or {}).get("content") or []
-        for block in content:
-            btype = block.get("type")
-            if btype == "text":
-                text = block.get("text") or ""
-                if text:
-                    frames.append({"type": "assistant", "text": text})
-            elif btype == "tool_use":
-                name = block.get("name") or "tool"
-                frames.append({
-                    "type": "tool",
-                    "name": name,
-                    "summary": _summarize_tool(name, block.get("input")),
-                })
-        return frames
+    # -- turno --------------------------------------------------------------
+    async def handle_user(self, text: str) -> None:
+        """Agenda um turno do usuário (não bloqueia o loop de recepção do WS)."""
+        text = (text or "").strip()
+        if not text:
+            return
+        asyncio.create_task(self._run_turn(text))
 
-    if etype == "result":
-        if event.get("is_error") or event.get("subtype") not in (None, "success"):
-            frames.append({
-                "type": "error",
-                "message": str(event.get("result") or event.get("subtype") or "erro desconhecido"),
-            })
-            return frames
-        usage = event.get("usage") or {}
-        compact_usage = {
-            "input": usage.get("input_tokens", 0) or 0,
-            "output": usage.get("output_tokens", 0) or 0,
-            "cache_read": usage.get("cache_read_input_tokens", 0) or 0,
-            "cache_write": usage.get("cache_creation_input_tokens", 0) or 0,
-            "cost_usd": event.get("total_cost_usd"),
-        }
-        frames.append({
-            "type": "result",
-            "text": event.get("result") or "",
-            "usage": compact_usage,
-        })
-        return frames
+    async def _run_turn(self, user_text: str) -> None:
+        async with self._lock:
+            self.messages.append({"role": "user", "content": user_text})
+            save_transcript(self.messages)
+            try:
+                client = self._anthropic()
+            except Exception as exc:  # noqa: BLE001
+                await self._broadcast({"type": "error", "message": str(exc)})
+                return
 
-    # Demais eventos (rate_limit_event, post_turn_summary, user echo, etc.): ocultos.
-    return frames
+            system = _system_prompt()
+            try:
+                while True:
+                    assistant_blocks: list[dict] = []
+                    async with client.messages.stream(
+                        model=MODEL,
+                        max_tokens=MAX_TOKENS,
+                        system=system,
+                        tools=TOOLS,
+                        messages=self.messages,
+                    ) as stream:
+                        async for event in stream:
+                            if (
+                                event.type == "content_block_delta"
+                                and getattr(event.delta, "type", "") == "text_delta"
+                            ):
+                                await self._broadcast(
+                                    {"type": "assistant", "text": event.delta.text}
+                                )
+                        final = await stream.get_final_message()
+
+                    assistant_blocks = [b.model_dump() for b in final.content]
+                    self.messages.append({"role": "assistant", "content": assistant_blocks})
+                    save_transcript(self.messages)
+
+                    if final.stop_reason != "tool_use":
+                        await self._broadcast({"type": "result"})
+                        break
+
+                    # Executa as ferramentas pedidas e devolve os resultados.
+                    tool_results: list[dict] = []
+                    for block in final.content:
+                        if block.type != "tool_use":
+                            continue
+                        await self._broadcast(
+                            {
+                                "type": "tool",
+                                "name": block.name,
+                                "summary": _summarize_tool(block.name, block.input),
+                            }
+                        )
+                        content, is_error = await _exec_tool(block.name, block.input)
+                        tool_results.append(
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": block.id,
+                                "content": content,
+                                "is_error": is_error,
+                            }
+                        )
+                    self.messages.append({"role": "user", "content": tool_results})
+                    save_transcript(self.messages)
+            except Exception as exc:  # noqa: BLE001
+                log.error("assistant_turn_failed", error=str(exc))
+                await self._broadcast({"type": "error", "message": str(exc)[:500]})
+
+
+def _extract_text(content: Any) -> str:
+    """Texto concatenado de um campo content (string ou lista de blocos)."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for b in content:
+            if isinstance(b, dict) and b.get("type") == "text" and b.get("text"):
+                parts.append(b["text"])
+        return "\n".join(parts)
+    return ""
+
+
+# Singleton do processo.
+_ASSISTANT: GeneralAssistant | None = None
+
+
+def get_assistant() -> GeneralAssistant:
+    global _ASSISTANT
+    if _ASSISTANT is None:
+        _ASSISTANT = GeneralAssistant()
+    return _ASSISTANT

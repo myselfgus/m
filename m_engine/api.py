@@ -32,7 +32,7 @@ from pydantic import BaseModel, Field
 
 from m_engine.config import get_settings
 from m_engine import store
-from m_engine.assistant import AssistantSession
+from m_engine.assistant import get_assistant, load_transcript
 from m_engine.store import load_info, pat_dir
 from m_engine.tasks import STAGE_TASKS, celery_app
 from m_engine.util import today
@@ -116,6 +116,16 @@ class ProfileUpdate(BaseModel):
     email: Optional[str] = None
     notes: Optional[str] = None
     professional: Optional[dict] = None
+
+
+class ProfessionalUpdate(BaseModel):
+    """Perfil do próprio profissional (Dr. Gustavo), global ao app."""
+
+    name: Optional[str] = None
+    specialty: Optional[str] = None
+    registration: Optional[str] = None  # CRM/RQE
+    clinic: Optional[str] = None
+    notes: Optional[str] = None
 
 
 class ConsultationSummary(BaseModel):
@@ -482,32 +492,77 @@ def list_stages() -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Assistente agêntico (Claude Code CLI) sobre WebSocket
+# Perfil do profissional (professional.json) — global ao app
 # ---------------------------------------------------------------------------
+def _professional_file() -> Path:
+    return get_settings().m_base / "professional.json"
+
+
+@app.get("/professional")
+def get_professional() -> dict:
+    """Retorna o perfil do profissional (Dr. Gustavo). Vazio se ainda não definido."""
+    p = _professional_file()
+    if not p.is_file():
+        return {}
+    try:
+        return json.loads(p.read_text("utf-8"))
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+@app.put("/professional")
+def put_professional(update: ProfessionalUpdate) -> dict:
+    """Salva/atualiza o perfil do profissional (merge dos campos não-nulos)."""
+    p = _professional_file()
+    current: dict = {}
+    if p.is_file():
+        try:
+            current = json.loads(p.read_text("utf-8"))
+        except Exception:  # noqa: BLE001
+            current = {}
+    for k, v in update.model_dump(exclude_none=True).items():
+        current[k] = v
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(current, ensure_ascii=False, indent=2), "utf-8")
+    return current
+
+
+# ---------------------------------------------------------------------------
+# Assistente agêntico GERAL e PERSISTENTE (Claude Sonnet 4.6) sobre WebSocket
+# ---------------------------------------------------------------------------
+@app.get("/assistant/history")
+def assistant_history() -> dict:
+    """Histórico persistido da conversa geral (replay alternativo ao WS)."""
+    return {"messages": load_transcript()}
+
+
 @app.websocket("/assistant/ws")
-async def assistant_ws(websocket: WebSocket, slug: Optional[str] = None) -> None:
+async def assistant_ws(websocket: WebSocket) -> None:
     """
-    Ponte WebSocket ↔ subprocesso do CLI Claude Code (streaming bidirecional).
+    Ponte WebSocket ↔ conversa geral persistente (Claude Sonnet 4.6 via API).
 
     Cliente → servidor: {"type":"user","text":"..."}
-    Servidor → cliente: {"type":"ready"} | {"type":"assistant","text":...}
-                        | {"type":"tool","name":...,"summary":...}
-                        | {"type":"result","text":...,"usage":{...}}
-                        | {"type":"error","message":...}
+    Servidor → cliente: {"type":"history",...} | {"type":"ready"}
+                        | {"type":"assistant","text":...} | {"type":"tool",...}
+                        | {"type":"result"} | {"type":"error","message":...}
     """
     await websocket.accept()
-    session = AssistantSession(slug=slug)
+    assistant = get_assistant()
+    queue = assistant.subscribe()
 
-    async def forward(frame: dict) -> None:
-        await websocket.send_json(frame)
+    async def pump() -> None:
+        while True:
+            frame = await queue.get()
+            await websocket.send_json(frame)
 
     pump_task: Optional[asyncio.Task] = None
     try:
-        await session.start()
+        # Replay do histórico persistido, depois "ready".
+        for frame in assistant.history_frames():
+            await websocket.send_json(frame)
         await websocket.send_json({"type": "ready"})
 
-        # Task que lê o stdout do CLI e empurra frames normalizados ao cliente.
-        pump_task = asyncio.create_task(session.read_events(forward))
+        pump_task = asyncio.create_task(pump())
 
         while True:
             data = await websocket.receive_text()
@@ -517,13 +572,11 @@ async def assistant_ws(websocket: WebSocket, slug: Optional[str] = None) -> None
                 await websocket.send_json({"type": "error", "message": "JSON inválido."})
                 continue
             if msg.get("type") == "user":
-                text = (msg.get("text") or "").strip()
-                if text:
-                    await session.send_user(text)
-            # Outros tipos de frame do cliente são ignorados silenciosamente.
+                # Agenda o turno; ele roda independente deste socket (sobrevive ao background).
+                await assistant.handle_user(msg.get("text") or "")
     except WebSocketDisconnect:
         pass
-    except Exception as exc:  # noqa: BLE001 — reporta e encerra de forma limpa
+    except Exception as exc:  # noqa: BLE001
         try:
             await websocket.send_json({"type": "error", "message": str(exc)[:500]})
         except Exception:
@@ -531,7 +584,7 @@ async def assistant_ws(websocket: WebSocket, slug: Optional[str] = None) -> None
     finally:
         if pump_task:
             pump_task.cancel()
-        await session.close()
+        assistant.unsubscribe(queue)
 
 
 @app.get("/healthz")

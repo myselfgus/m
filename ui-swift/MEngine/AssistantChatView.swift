@@ -3,7 +3,8 @@ import SwiftUI
 /// Coluna direita "Assistente": chat com o agente do M-Engine via WebSocket.
 /// Quando `slug` está presente, o assistente opera no contexto desse paciente.
 struct AssistantChatView: View {
-    let slug: String?
+    /// Quando presente (iOS sheet), o header mostra um botão de fechar.
+    var onClose: (() -> Void)? = nil
 
     @EnvironmentObject private var settings: AppSettings
     @StateObject private var session = AssistantSession.placeholder
@@ -19,7 +20,7 @@ struct AssistantChatView: View {
             inputBar
         }
         .background(.regularMaterial)
-        .task(id: slug) { startSession() }
+        .task { startSession() }
         .onDisappear { live?.disconnect() }
     }
 
@@ -32,11 +33,7 @@ struct AssistantChatView: View {
                 .foregroundStyle(HOS.blue)
             VStack(alignment: .leading, spacing: 1) {
                 Text("Assistente").font(.hosTitle3).foregroundStyle(.primary)
-                if let slug, !slug.isEmpty {
-                    Text(slug).font(.hosCaption).foregroundStyle(.secondary).lineLimit(1)
-                } else {
-                    Text("contexto geral").font(.hosCaption).foregroundStyle(.secondary)
-                }
+                Text("Sonnet 4.6 · contexto geral").font(.hosCaption).foregroundStyle(.secondary)
             }
             Spacer()
             StatusPill(
@@ -44,6 +41,15 @@ struct AssistantChatView: View {
                 color: bound.connected ? HOS.complete : HOS.pending,
                 systemImage: bound.connected ? "circle.fill" : "circle.dotted"
             )
+            if let onClose {
+                Button(action: onClose) {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 18))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Fechar assistente")
+            }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
@@ -135,7 +141,7 @@ struct AssistantChatView: View {
     private func startSession() {
         live?.disconnect()
         guard let base = URL(string: settings.baseURL) else { return }
-        let s = AssistantSession(baseURL: base, apiKey: settings.apiKey, slug: slug)
+        let s = AssistantSession(baseURL: base, apiKey: settings.apiKey)
         live = s
         s.connect()
     }
@@ -222,6 +228,6 @@ private struct MessageBubble: View {
 private extension AssistantSession {
     /// Placeholder inerte para satisfazer `@StateObject` antes de a sessão real existir.
     static var placeholder: AssistantSession {
-        AssistantSession(baseURL: URL(string: "http://invalid")!, apiKey: nil, slug: nil)
+        AssistantSession(baseURL: URL(string: "http://invalid")!, apiKey: nil)
     }
 }

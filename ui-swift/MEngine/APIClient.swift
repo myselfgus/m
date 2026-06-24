@@ -119,6 +119,20 @@ struct APIClient {
         return try await send(req, as: PatientProfile.self)
     }
 
+    /// Perfil do profissional (global, `GET /professional`). Vazio se não definido.
+    func fetchProfessional() async throws -> Professional {
+        (try? await send(makeRequest("professional"), as: Professional.self)) ?? Professional()
+    }
+
+    /// Salva (PUT) o perfil do profissional e devolve o atualizado.
+    @discardableResult
+    func saveProfessional(_ prof: Professional) async throws -> Professional {
+        var req = makeRequest("professional", method: "PUT")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try JSONEncoder().encode(prof)
+        return try await send(req, as: Professional.self)
+    }
+
     /// Consultas do paciente, agrupadas em C1/C2/C3… (`/patients/{slug}/consultations`).
     func fetchConsultations(slug: String) async throws -> [Consultation] {
         let s = Self.escape(slug)
@@ -308,9 +322,9 @@ final class AssistantSession: ObservableObject {
     private var task: URLSessionWebSocketTask?
     private let session = URLSession(configuration: .default)
 
-    /// Constrói a sessão. Deriva a URL ws/wss a partir da base http/https,
-    /// caminho "assistant/ws", com `?slug=` quando houver.
-    init(baseURL: URL, apiKey: String?, slug: String?) {
+    /// Constrói a sessão GERAL. Deriva a URL ws/wss a partir da base http/https,
+    /// caminho "assistant/ws" (sem paciente — a conversa é única e persistente).
+    init(baseURL: URL, apiKey: String?) {
         self.apiKey = (apiKey?.isEmpty == false) ? apiKey : nil
 
         var url = baseURL.appendingPathComponent("assistant/ws")
@@ -318,9 +332,6 @@ final class AssistantSession: ObservableObject {
             switch comps.scheme {
             case "https": comps.scheme = "wss"
             default: comps.scheme = "ws"
-            }
-            if let slug, !slug.isEmpty {
-                comps.queryItems = [URLQueryItem(name: "slug", value: slug)]
             }
             url = comps.url ?? url
         }
@@ -388,6 +399,12 @@ final class AssistantSession: ObservableObject {
               let event = try? JSONDecoder().decode(ChatEvent.self, from: data) else { return }
 
         switch event.type {
+        case "history":
+            // Replay do histórico persistido: mensagem completa (não streaming).
+            if let text = event.text, !text.isEmpty {
+                let role: ChatRole = (event.role == "user") ? .user : .assistant
+                messages.append(ChatMessage(role: role, text: text))
+            }
         case "ready":
             connected = true
         case "text", "assistant", "delta":

@@ -16,7 +16,13 @@ struct ContentView: View {
     @State private var loading = false
     @State private var showSettings = false
     @State private var showNewPatient = false
+    // macOS: assistente abre por padrão como inspector lateral.
+    // iOS: começa fechado e é aberto sob demanda (FAB + sheet) — ver body.
+    #if os(macOS)
     @AppStorage("m_show_assistant") private var showAssistant = true
+    #else
+    @AppStorage("m_show_assistant_ios") private var showAssistant = false
+    #endif
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
 
     /// Slug do paciente selecionado (ou nil em Início/Nova sessão).
@@ -40,20 +46,33 @@ struct ContentView: View {
         } detail: {
             detail
         }
+        #if os(macOS)
         .inspector(isPresented: $showAssistant) {
-            AssistantChatView(slug: currentSlug)
+            AssistantChatView()
                 .inspectorColumnWidth(min: 300, ideal: 340, max: 460)
         }
+        #endif
         .toolbar {
             ToolbarItem {
                 Button { showNewPatient = true } label: { Image(systemName: "person.badge.plus") }
                     .help("Novo paciente")
             }
+            #if os(macOS)
             ToolbarItem {
                 Button { showAssistant.toggle() } label: { Image(systemName: "sparkles") }
                     .help(showAssistant ? "Ocultar assistente" : "Mostrar assistente")
             }
+            #endif
         }
+        // iOS: botão flutuante sempre acessível para abrir o assistente, já que o
+        // inspector lateral não cabe no iPhone. Apresentado como sheet.
+        #if os(iOS)
+        .overlay(alignment: .bottomTrailing) { assistantFAB }
+        .sheet(isPresented: $showAssistant) {
+            AssistantChatView(onClose: { showAssistant = false })
+                .presentationDragIndicator(.visible)
+        }
+        #endif
         .task { await loadPatients() }
         .sheet(isPresented: $showSettings) { SettingsView() }
         .sheet(isPresented: $showNewPatient) {
@@ -64,6 +83,24 @@ struct ContentView: View {
             })
         }
     }
+
+    #if os(iOS)
+    /// Botão flutuante (FAB) que abre o assistente de qualquer tela no iPhone/iPad.
+    private var assistantFAB: some View {
+        Button { showAssistant = true } label: {
+            Image(systemName: "sparkles")
+                .font(.system(size: 20, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: 56, height: 56)
+                .background(HOS.blue, in: Circle())
+                .shadow(color: .black.opacity(0.25), radius: 8, x: 0, y: 4)
+        }
+        .buttonStyle(.plain)
+        .padding(.trailing, 20)
+        .padding(.bottom, 20)
+        .accessibilityLabel("Abrir assistente")
+    }
+    #endif
 
     // MARK: - Sidebar
 
@@ -162,17 +199,52 @@ struct PatientRow: View {
 struct SettingsView: View {
     @EnvironmentObject private var settings: AppSettings
     @Environment(\.dismiss) private var dismiss
+    @State private var tab = 0
     @State private var healthMessage: String?
     @State private var healthOK = false
     @State private var checking = false
+    // Perfil do profissional
+    @State private var prof = Professional()
+    @State private var savingProf = false
+    @State private var profSaved = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 10) {
                 BrandMark(size: 24)
                 Text("Ajustes").font(.hosTitle1)
+                Spacer()
+                Button { dismiss() } label: {
+                    ActionLabel("Fechar", systemImage: "xmark")
+                }
+                .keyboardShortcut(.cancelAction)
             }
 
+            Picker("", selection: $tab) {
+                Text("Conexão").tag(0)
+                Text("Profissional").tag(1)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+
+            ScrollView {
+                Group {
+                    if tab == 0 { connectionTab } else { professionalTab }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .padding(22)
+        #if os(macOS)
+        .frame(minWidth: 460, minHeight: 400)
+        #endif
+        .task { prof = (try? await settings.makeClient().fetchProfessional()) ?? Professional() }
+    }
+
+    // MARK: - Aba Conexão
+
+    private var connectionTab: some View {
+        VStack(alignment: .leading, spacing: 18) {
             VStack(alignment: .leading, spacing: 6) {
                 Text("URL DA API").font(.hosSubhead).foregroundStyle(.secondary)
                 TextField("http://localhost:8000", text: $settings.baseURL)
@@ -191,7 +263,7 @@ struct SettingsView: View {
 
             HStack(spacing: 10) {
                 Button { Task { await checkHealth() } } label: {
-                    Label("Testar conexão", systemImage: "antenna.radiowaves.left.and.right")
+                    ActionLabel("Testar conexão", systemImage: "antenna.radiowaves.left.and.right")
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(HOS.blue)
@@ -210,15 +282,59 @@ struct SettingsView: View {
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
             }
-
-            Spacer()
-            HStack {
-                Spacer()
-                Button("Fechar") { dismiss() }.keyboardShortcut(.defaultAction)
-            }
         }
-        .padding(22)
-        .frame(minWidth: 420, minHeight: 300)
+    }
+
+    // MARK: - Aba Profissional
+
+    private var professionalTab: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            profField("NOME", text: $prof.name, placeholder: "Dr(a). Nome Completo")
+            profField("ESPECIALIDADE", text: $prof.specialty, placeholder: "Psiquiatria, Clínica Médica…")
+            profField("REGISTRO (CRM / RQE)", text: $prof.registration, placeholder: "CRM-XX 000000")
+            profField("CLÍNICA / INSTITUIÇÃO", text: $prof.clinic, placeholder: "Nome do consultório/clínica")
+            VStack(alignment: .leading, spacing: 6) {
+                Text("OBSERVAÇÕES").font(.hosSubhead).foregroundStyle(.secondary)
+                TextField("Notas livres (contexto para o assistente)", text: $prof.notes, axis: .vertical)
+                    .textFieldStyle(.roundedBorder)
+                    .lineLimit(2...5)
+            }
+            HStack(spacing: 10) {
+                Button { Task { await saveProfessional() } } label: {
+                    if savingProf { ProgressView().controlSize(.small) }
+                    else { ActionLabel("Salvar perfil", systemImage: "tray.and.arrow.down.fill") }
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(HOS.blue)
+                .disabled(savingProf)
+                if profSaved {
+                    StatusPill(text: "Salvo", color: HOS.complete, systemImage: "checkmark.circle.fill")
+                }
+            }
+            Text("Usado como contexto do assistente e compartilhado entre iOS e macOS.")
+                .font(.hosFootnote).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func profField(_ label: String, text: Binding<String>, placeholder: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(label).font(.hosSubhead).foregroundStyle(.secondary)
+            TextField(placeholder, text: text)
+                .textFieldStyle(.roundedBorder)
+        }
+    }
+
+    private func saveProfessional() async {
+        savingProf = true
+        profSaved = false
+        defer { savingProf = false }
+        do {
+            prof = try await settings.makeClient().saveProfessional(prof)
+            profSaved = true
+        } catch {
+            NSLog("MENGINE saveProfessional FAILED: %@", "\(error)")
+        }
     }
 
     private func checkHealth() async {

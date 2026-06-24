@@ -100,12 +100,12 @@ struct PatientDetailView: View {
             Spacer()
             VStack(spacing: 8) {
                 Button { showNewConsultation = true } label: {
-                    Label("Nova consulta", systemImage: "calendar.badge.plus")
+                    ActionLabel("Nova consulta", systemImage: "calendar.badge.plus")
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(HOS.blue)
                 Button { showProfileEditor = true } label: {
-                    Label("Editar perfil", systemImage: "person.text.rectangle")
+                    ActionLabel("Editar perfil", systemImage: "person.text.rectangle")
                 }
                 .buttonStyle(.bordered)
                 .tint(HOS.blue)
@@ -138,7 +138,7 @@ struct PatientDetailView: View {
                 Text("Nenhuma consulta registrada para este paciente.")
             } actions: {
                 Button { showNewConsultation = true } label: {
-                    Label("Nova consulta", systemImage: "calendar.badge.plus")
+                    ActionLabel("Nova consulta", systemImage: "calendar.badge.plus")
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(HOS.blue)
@@ -171,9 +171,6 @@ struct PatientDetailView: View {
                     StatusPill(text: source, color: HOS.stStt, systemImage: "waveform")
                 }
             }
-            if !consultation.tags.isEmpty {
-                FlowChips(items: consultation.tags, color: HOS.info, symbol: "tag.fill")
-            }
             if consultation.documents.isEmpty {
                 Text("Sem documentos nesta consulta.").font(.hosFootnote).foregroundStyle(.secondary)
             } else {
@@ -201,12 +198,12 @@ struct PatientDetailView: View {
     private func consultationActions(_ consultation: Consultation) -> some View {
         HStack(spacing: 10) {
             Button { docTarget = consultation } label: {
-                Label("Novo documento", systemImage: "doc.badge.plus")
+                ActionLabel("Novo documento", systemImage: "doc.badge.plus")
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
             Button { importTarget = consultation } label: {
-                Label("Importar arquivo", systemImage: "square.and.arrow.down")
+                ActionLabel("Importar arquivo", systemImage: "square.and.arrow.down")
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
@@ -401,12 +398,15 @@ struct PipelineControl: View {
                         Image(systemName: phaseSymbol(phase, fallback: stageSymbol(stage.key)))
                             .font(.system(size: 11, weight: .semibold))
                     }
+                    #if os(macOS)
                     Text(stage.label).font(.hosCaption)
+                    #endif
                 }
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
             .tint(phaseTint(phase, base: tint))
+            .accessibilityLabel(stage.label)
             .disabled(phase == .queued || phase == .running)
 
             phasePill(stage.key, phase: phase)
@@ -546,8 +546,8 @@ struct DocumentEditorView: View {
                 Button {
                     withAnimation { editing.toggle() }
                 } label: {
-                    Label(editing ? "Pré-visualizar" : "Editar",
-                          systemImage: editing ? "eye" : "square.and.pencil")
+                    ActionLabel(editing ? "Pré-visualizar" : "Editar",
+                                systemImage: editing ? "eye" : "square.and.pencil")
                 }
             }
             ToolbarItem(placement: .confirmationAction) {
@@ -555,7 +555,7 @@ struct DocumentEditorView: View {
                     Task { await save() }
                 } label: {
                     if saving { ProgressView().controlSize(.small) }
-                    else { Label("Salvar", systemImage: "tray.and.arrow.down.fill") }
+                    else { ActionLabel("Salvar", systemImage: "tray.and.arrow.down.fill") }
                 }
                 .disabled(!isDirty || saving)
             }
@@ -682,13 +682,15 @@ struct ProfileEditorView: View {
 
             Spacer()
             HStack {
-                Button("Cancelar") { dismiss() }
+                Button { dismiss() } label: {
+                    ActionLabel("Cancelar", systemImage: "xmark")
+                }
                 Spacer()
                 Button {
                     Task { await save() }
                 } label: {
                     if saving { ProgressView().controlSize(.small) }
-                    else { Label("Salvar", systemImage: "tray.and.arrow.down.fill") }
+                    else { ActionLabel("Salvar", systemImage: "tray.and.arrow.down.fill") }
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(HOS.blue)
@@ -697,7 +699,9 @@ struct ProfileEditorView: View {
             }
         }
         .padding(22)
+        #if os(macOS)
         .frame(minWidth: 440, minHeight: 420)
+        #endif
         .onAppear { ageText = profile.age.map(String.init) ?? "" }
     }
 

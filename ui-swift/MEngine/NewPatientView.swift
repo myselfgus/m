@@ -69,7 +69,9 @@ struct NewPatientView: View {
             .frame(maxWidth: .infinity)
         }
         .background(.background)
+        #if os(macOS)
         .frame(minWidth: 440, minHeight: 540)
+        #endif
     }
 
     private var header: some View {
@@ -83,13 +85,15 @@ struct NewPatientView: View {
 
     private var actions: some View {
         HStack {
-            Button("Cancelar") { dismiss() }
+            Button { dismiss() } label: {
+                ActionLabel("Cancelar", systemImage: "xmark")
+            }
             Spacer()
             Button {
                 Task { await create() }
             } label: {
                 if saving { ProgressView().controlSize(.small) }
-                else { Label("Criar", systemImage: "checkmark") }
+                else { ActionLabel("Criar", systemImage: "checkmark") }
             }
             .buttonStyle(.borderedProminent)
             .tint(HOS.blue)

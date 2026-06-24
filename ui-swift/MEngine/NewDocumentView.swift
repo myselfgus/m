@@ -53,7 +53,9 @@ struct NewDocumentView: View {
             actions
         }
         .padding(22)
+        #if os(macOS)
         .frame(minWidth: 480, minHeight: 520)
+        #endif
         .background(.background)
         .fileImporter(isPresented: $showImporter, allowedContentTypes: importTypes) { result in
             if case let .success(url) = result {
@@ -94,9 +96,9 @@ struct NewDocumentView: View {
 
     private var actions: some View {
         HStack(spacing: 12) {
-            Button { dismiss() } label: { Text("Cancelar") }
+            Button { dismiss() } label: { ActionLabel("Cancelar", systemImage: "xmark") }
             Button { showImporter = true } label: {
-                Label("Importar arquivo", systemImage: "square.and.arrow.down")
+                ActionLabel("Importar arquivo", systemImage: "square.and.arrow.down")
             }
             .buttonStyle(.bordered)
             .disabled(saving)
@@ -105,7 +107,7 @@ struct NewDocumentView: View {
                 Task { await create() }
             } label: {
                 if saving { ProgressView().controlSize(.small) }
-                else { Label("Criar", systemImage: "checkmark") }
+                else { ActionLabel("Criar", systemImage: "checkmark") }
             }
             .buttonStyle(.borderedProminent)
             .tint(HOS.blue)

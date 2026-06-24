@@ -253,6 +253,16 @@ struct ChatEvent: Decodable {
     let text: String?
     let name: String?
     let summary: String?
+    let role: String?   // presente em frames {type:"history", role:"user"|"assistant"}
+}
+
+/// Perfil do próprio profissional (global ao app, servido por GET/PUT /professional).
+struct Professional: Codable, Equatable {
+    var name: String = ""
+    var specialty: String = ""
+    var registration: String = ""   // CRM/RQE
+    var clinic: String = ""
+    var notes: String = ""
 }
 
 /// Alias de modelo enviado ao pipeline. `nil` => cada stage usa seu default

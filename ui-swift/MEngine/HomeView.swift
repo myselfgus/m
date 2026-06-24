@@ -127,21 +127,21 @@ struct HomeView: View {
             Text("AÇÕES").font(.hosSubhead).foregroundStyle(.secondary)
             HStack(spacing: 10) {
                 Button { showNewPatient = true } label: {
-                    Label("Novo paciente", systemImage: "person.crop.circle.badge.plus")
+                    ActionLabel("Novo paciente", systemImage: "person.crop.circle.badge.plus")
                         .font(.hosTitle3)
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(HOS.blue)
 
                 Button { onNova() } label: {
-                    Label("Nova sessão", systemImage: "waveform.badge.mic")
+                    ActionLabel("Nova sessão", systemImage: "waveform.badge.mic")
                         .font(.hosTitle3)
                 }
                 .buttonStyle(.bordered)
                 .tint(HOS.blue)
 
                 Button { onNova() } label: {
-                    Label("Importar áudio", systemImage: "square.and.arrow.down")
+                    ActionLabel("Importar áudio", systemImage: "square.and.arrow.down")
                         .font(.hosTitle3)
                 }
                 .buttonStyle(.bordered)
@@ -240,11 +240,11 @@ struct HomeView: View {
                 .multilineTextAlignment(.center)
             HStack(spacing: 10) {
                 Button { showNewPatient = true } label: {
-                    Label("Novo paciente", systemImage: "person.crop.circle.badge.plus")
+                    ActionLabel("Novo paciente", systemImage: "person.crop.circle.badge.plus")
                 }
                 .buttonStyle(.borderedProminent).tint(HOS.blue)
                 Button { onNova() } label: {
-                    Label("Nova sessão", systemImage: "waveform.badge.mic")
+                    ActionLabel("Nova sessão", systemImage: "waveform.badge.mic")
                 }
                 .buttonStyle(.bordered).tint(HOS.blue)
             }

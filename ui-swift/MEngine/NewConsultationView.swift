@@ -60,13 +60,15 @@ struct NewConsultationView: View {
 
             Spacer()
             HStack {
-                Button("Cancelar") { dismiss() }
+                Button { dismiss() } label: {
+                    ActionLabel("Cancelar", systemImage: "xmark")
+                }
                 Spacer()
                 Button {
                     Task { await create() }
                 } label: {
                     if saving { ProgressView().controlSize(.small) }
-                    else { Label("Criar consulta", systemImage: "checkmark") }
+                    else { ActionLabel("Criar consulta", systemImage: "checkmark") }
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(HOS.blue)
@@ -75,7 +77,9 @@ struct NewConsultationView: View {
             }
         }
         .padding(22)
+        #if os(macOS)
         .frame(minWidth: 380, minHeight: 480)
+        #endif
         .background(.background)
     }
 
