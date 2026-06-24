@@ -69,6 +69,8 @@ targets:
         GENERATE_INFOPLIST_FILE: NO
         ENABLE_PREVIEWS: YES
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon   # ícone do app (Assets.xcassets/AppIcon.appiconset, da assets/m-icon.jpg)
-        # Sem time de assinatura definido: simulador builda sem assinar.
-        # Para device físico, abra no Xcode e selecione seu Team em Signing.
+        # Assinatura automática fixada no Team da conta (TeamIdentifier real do
+        # provisioning profile / OU do cert "Apple Development"). Mantê-lo aqui evita
+        # que o `xcodegen generate` apague a assinatura pro device a cada regeneração.
         CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: G3LG868DG4
