@@ -63,20 +63,73 @@ def _professional_path() -> Path:
     return get_settings().m_base / "professional.json"
 
 
+def _has_tool_use(content: Any) -> bool:
+    """True se o conteúdo (lista de blocos) contém algum bloco tool_use."""
+    if isinstance(content, list):
+        return any(isinstance(b, dict) and b.get("type") == "tool_use" for b in content)
+    return False
+
+
+def _has_tool_result(content: Any) -> bool:
+    """True se o conteúdo (lista de blocos) contém algum bloco tool_result."""
+    if isinstance(content, list):
+        return any(isinstance(b, dict) and b.get("type") == "tool_result" for b in content)
+    return False
+
+
+def _sanitize(messages: list[dict]) -> list[dict]:
+    """
+    Repara um transcript para um estado VÁLIDO para a Messages API, evitando 400
+    que travariam a conversa para sempre. Varre do fim removendo:
+      - turno final `assistant` com `tool_use` sem o `tool_result` correspondente
+        logo depois (turno interrompido antes de executar a ferramenta);
+      - turno final `user` que é só `tool_result` sem o `tool_use` anterior.
+    Por fim, garante que a 1ª mensagem (se houver) seja `role:"user"`.
+    """
+    if not isinstance(messages, list):
+        return []
+    msgs = [m for m in messages if isinstance(m, dict) and m.get("role") in ("user", "assistant")]
+
+    # Remove caudas inválidas (pode haver mais de uma camada).
+    changed = True
+    while changed and msgs:
+        changed = False
+        last = msgs[-1]
+        if last.get("role") == "assistant" and _has_tool_use(last.get("content")):
+            # tool_use sem tool_result seguinte → turno interrompido.
+            msgs.pop()
+            changed = True
+            continue
+        if last.get("role") == "user" and _has_tool_result(last.get("content")):
+            prev = msgs[-2] if len(msgs) >= 2 else None
+            if not (prev and prev.get("role") == "assistant" and _has_tool_use(prev.get("content"))):
+                msgs.pop()
+                changed = True
+                continue
+
+    # A conversa precisa começar com `user`.
+    while msgs and msgs[0].get("role") != "user":
+        msgs.pop(0)
+    return msgs
+
+
 def load_transcript() -> list[dict]:
     p = _transcript_path()
     if p.is_file():
         try:
-            return json.loads(p.read_text("utf-8"))
+            return _sanitize(json.loads(p.read_text("utf-8")))
         except Exception:  # noqa: BLE001
             return []
     return []
 
 
 def save_transcript(messages: list[dict]) -> None:
-    _transcript_path().write_text(
-        json.dumps(messages, ensure_ascii=False, indent=0), "utf-8"
-    )
+    """Grava o transcript de forma ATÔMICA (tmp + os.replace) p/ não corromper em crash."""
+    p = _transcript_path()
+    data = json.dumps(messages, ensure_ascii=False, indent=0)
+    tmp = p.with_suffix(p.suffix + ".tmp")
+    tmp.write_text(data, "utf-8")
+    os.replace(tmp, p)
 
 
 def _professional_context() -> str:
@@ -271,6 +324,11 @@ class GeneralAssistant:
         self.subscribers: set[asyncio.Queue] = set()
         self._lock = asyncio.Lock()
         self._client = None  # AsyncAnthropic, lazy
+        # Referência FORTE às tasks de turno: o event loop só guarda referência fraca,
+        # então sem isto o GC poderia cancelar um turno no meio (modelo "não responde").
+        self._turn_tasks: set[asyncio.Task] = set()
+        # Último erro de turno (em background); reemitido ao reconectar p/ não sumir.
+        self._last_error: str | None = None
 
     def _anthropic(self):
         if self._client is None:
@@ -311,6 +369,9 @@ class GeneralAssistant:
                 frames.append({"type": "history", "role": "user", "text": text})
             elif role == "assistant":
                 frames.append({"type": "history", "role": "assistant", "text": text})
+        # Reemite um turno que falhou em background (socket caído) para não sumir.
+        if self._last_error:
+            frames.append({"type": "error", "message": self._last_error})
         return frames
 
     # -- turno --------------------------------------------------------------
@@ -319,21 +380,29 @@ class GeneralAssistant:
         text = (text or "").strip()
         if not text:
             return
-        asyncio.create_task(self._run_turn(text))
+        # Guarda referência forte até concluir; senão o GC pode cancelar o turno.
+        task = asyncio.create_task(self._run_turn(text))
+        self._turn_tasks.add(task)
+        task.add_done_callback(self._turn_tasks.discard)
 
     async def _run_turn(self, user_text: str) -> None:
         async with self._lock:
+            self._last_error = None
             self.messages.append({"role": "user", "content": user_text})
             save_transcript(self.messages)
             try:
                 client = self._anthropic()
             except Exception as exc:  # noqa: BLE001
+                self._last_error = str(exc)
                 await self._broadcast({"type": "error", "message": str(exc)})
                 return
 
             system = _system_prompt()
             try:
                 while True:
+                    # Auto-corrige um estado inválido em memória antes de chamar a API
+                    # (ex.: tool_use sem tool_result), evitando 400 que travaria a conversa.
+                    self.messages = _sanitize(self.messages)
                     assistant_blocks: list[dict] = []
                     async with client.messages.stream(
                         model=MODEL,
@@ -385,6 +454,7 @@ class GeneralAssistant:
                     save_transcript(self.messages)
             except Exception as exc:  # noqa: BLE001
                 log.error("assistant_turn_failed", error=str(exc))
+                self._last_error = str(exc)[:500]
                 await self._broadcast({"type": "error", "message": str(exc)[:500]})
 
 
