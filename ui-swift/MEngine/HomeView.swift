@@ -60,7 +60,10 @@ struct HomeView: View {
             .frame(maxWidth: 920, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .background(.background)
+        .background {
+            Rectangle().fill(.background).ignoresSafeArea()
+            BlueWash()
+        }
         .navigationTitle("Início")
         .toolbar {
             ToolbarItem {

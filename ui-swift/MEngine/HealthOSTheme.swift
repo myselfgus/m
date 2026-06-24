@@ -1,8 +1,9 @@
 import SwiftUI
 
-// MARK: - HealthOS Design System (tokens) — adaptado do bundle healthdrive.
-// Cores da marca, stage tints (STT/PROC/SPEECH/ASL/VDLP/GEM), estados semânticos,
-// tipografia (SF Pro / SF Pro Rounded / SF Mono), glass cards, capsules e stat cards.
+// MARK: - HealthOS Design System (tokens) — refinado a partir do bundle healthdrive (HDrive v2).
+// Liquid Glass THICK + shadow FLOATING, paleta da marca + stage tints + estados semânticos,
+// tipografia macOS 26, marca connection-node nativa, capsules e stat cards.
+// Fonte canônica: healthdrive/project/skill/healthos-design/references/tokens.css.
 
 extension Color {
     init(hex: String) {
@@ -20,14 +21,16 @@ extension Color {
 }
 
 enum HOS {
-    // Marca
-    static let ink = Color(hex: "1C2533")
-    static let navy = Color(hex: "1C3A63")
-    static let blue = Color(hex: "3B82F6")        // tint do sistema
+    // ─── Marca (do logo) ───────────────────────────────────────────────
+    static let ink = Color(hex: "1C2533")          // "health" — navy quase preto
+    static let navy = Color(hex: "1C3A63")         // metade escura do ícone
+    static let navyLt = Color(hex: "2E5388")
+    static let blue = Color(hex: "3B82F6")         // "OS" + metade clara — tint do sistema
     static let blueBright = Color(hex: "4F8DF5")
     static let blueDeep = Color(hex: "1E5BC6")
+    static let blueSoft = Color(hex: "3B82F6").opacity(0.12)
 
-    // Stage tints (pipeline)
+    // ─── Stage tints (STT · PROC · SPEECH · ASL · VDLP · GEM) ───────────
     static let stStt = Color(hex: "64748B")
     static let stProc = Color(hex: "3B82F6")
     static let stSpeech = Color(hex: "0EA5B7")
@@ -35,22 +38,28 @@ enum HOS {
     static let stVdlp = Color(hex: "8B5CF6")
     static let stGem = Color(hex: "1FA86F")
 
-    // Estados semânticos
-    static let complete = Color(hex: "1FA86F")
+    // ─── Estados semânticos ─────────────────────────────────────────────
+    static let complete = Color(hex: "1FA86F")     // gem_complete
     static let running = Color(hex: "3B82F6")
-    static let review = Color(hex: "C2780C")
+    static let review = Color(hex: "C2780C")        // needs_review
     static let pending = Color(hex: "64748B")
     static let error = Color(hex: "C2354A")
+    static let degraded = Color(hex: "C2780C")
     static let info = Color(hex: "2C5BA0")
     static let queued = Color(hex: "7A8699")
 
-    // Stat-card tints (Home)
+    // ─── Stat-card tints (Home) ─────────────────────────────────────────
     static let tintBlue = Color(hex: "3B82F6")
     static let tintIndigo = Color(hex: "5B5BD6")
     static let tintPurple = Color(hex: "8B5CF6")
     static let tintTeal = Color(hex: "0EA5B7")
 
-    // Raios
+    // ─── Superfícies (system-adaptive via .background; estes são realces) ─
+    static let divider = ink.opacity(0.08)
+    static let glassTint = blue.opacity(0.04)
+    static let glassHairline = Color.white.opacity(0.45)
+
+    // ─── Raios ──────────────────────────────────────────────────────────
     static let rSm: CGFloat = 6
     static let rMd: CGFloat = 8
     static let rLg: CGFloat = 12
@@ -77,6 +86,7 @@ enum HOS {
         case "STARTED", "RUNNING", "PROGRESS": return running
         case "RETRY", "REVIEW", "NEEDS_REVIEW": return review
         case "FAILURE", "ERROR": return error
+        case "DEGRADED": return degraded
         case "PENDING", "QUEUED": return queued
         default: return info
         }
@@ -100,24 +110,102 @@ extension Font {
     static func hosStat(_ size: CGFloat = 30) -> Font { .system(size: size, weight: .semibold, design: .rounded) }
 }
 
-// MARK: - Glass card
+// MARK: - Elevação (shadow FLOATING do design system)
 
-struct HealthCard: ViewModifier {
-    var padding: CGFloat = 14
+struct FloatingShadow: ViewModifier {
+    // --shadow-floating: 0 8px 24px -4px rgba(0,0,0,.16), 0 2px 6px rgba(0,0,0,.08)
     func body(content: Content) -> some View {
         content
-            .padding(padding)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: HOS.rXl, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: HOS.rXl, style: .continuous)
-                    .strokeBorder(.white.opacity(0.06), lineWidth: 0.5)
-            )
-            .shadow(color: .black.opacity(0.06), radius: 3, x: 0, y: 1)
+            .shadow(color: .black.opacity(0.16), radius: 12, x: 0, y: 8)
+            .shadow(color: .black.opacity(0.08), radius: 3, x: 0, y: 2)
+    }
+}
+
+struct CardShadow: ViewModifier {
+    // --shadow-card: elevação sutil para superfícies estáticas
+    func body(content: Content) -> some View {
+        content.shadow(color: .black.opacity(0.06), radius: 3, x: 0, y: 1)
     }
 }
 
 extension View {
-    func healthCard(padding: CGFloat = 14) -> some View { modifier(HealthCard(padding: padding)) }
+    func floatingShadow() -> some View { modifier(FloatingShadow()) }
+    func cardShadow() -> some View { modifier(CardShadow()) }
+}
+
+// MARK: - Superfície de vidro (Liquid Glass: thin / regular / THICK)
+
+enum GlassLevel {
+    case thin, regular, thick
+    var material: Material {
+        switch self {
+        case .thin: return .ultraThinMaterial
+        case .regular: return .regularMaterial
+        case .thick: return .thickMaterial   // glass-thick (0.86 / blur 32)
+        }
+    }
+}
+
+/// Superfície de vidro com borda-realce (glass-border) — base dos cards.
+struct GlassSurface: ViewModifier {
+    var level: GlassLevel = .thick
+    var cornerRadius: CGFloat = HOS.rXl
+    var tinted: Bool = false
+
+    func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        content
+            .background(level.material, in: shape)
+            .overlay {
+                if tinted { shape.fill(HOS.glassTint) }
+            }
+            .overlay {
+                // glass-border: realce branco no topo decaindo (aresta de vidro)
+                shape.stroke(
+                    LinearGradient(
+                        colors: [.white.opacity(0.50), .white.opacity(0.10)],
+                        startPoint: .top, endPoint: .bottom),
+                    lineWidth: 0.6)
+            }
+            .clipShape(shape)
+    }
+}
+
+extension View {
+    /// Superfície de vidro nua (sem padding), nível configurável.
+    func glassSurface(_ level: GlassLevel = .thick, cornerRadius: CGFloat = HOS.rXl, tinted: Bool = false) -> some View {
+        modifier(GlassSurface(level: level, cornerRadius: cornerRadius, tinted: tinted))
+    }
+}
+
+// MARK: - Glass card (THICK + FLOATING — default do design system refinado)
+
+struct HealthCard: ViewModifier {
+    var padding: CGFloat = 14
+    var level: GlassLevel = .thick
+    var floating: Bool = true
+    var tinted: Bool = false
+
+    func body(content: Content) -> some View {
+        content
+            .padding(padding)
+            .glassSurface(level, cornerRadius: HOS.rXl, tinted: tinted)
+            .modifier(floating ? AnyViewModifier(FloatingShadow()) : AnyViewModifier(CardShadow()))
+    }
+}
+
+/// Apaga a diferença de tipo entre dois modifiers num ternário.
+struct AnyViewModifier: ViewModifier {
+    private let apply: (AnyView) -> AnyView
+    init<M: ViewModifier>(_ m: M) { apply = { AnyView($0.modifier(m)) } }
+    func body(content: Content) -> some View { apply(AnyView(content)) }
+}
+
+extension View {
+    /// Card de vidro THICK + sombra FLOATING (default). Use `level`/`floating` para variar.
+    func healthCard(padding: CGFloat = 14, level: GlassLevel = .thick, floating: Bool = true, tinted: Bool = false) -> some View {
+        modifier(HealthCard(padding: padding, level: level, floating: floating, tinted: tinted))
+    }
 }
 
 // MARK: - Capsule / status pill
@@ -139,7 +227,7 @@ struct StatusPill: View {
     }
 }
 
-// MARK: - Stat card (Home)
+// MARK: - Stat card (Home) — ícone em chip tintado + número rounded
 
 struct StatCard: View {
     let symbol: String
@@ -149,9 +237,14 @@ struct StatCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Image(systemName: symbol)
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(tint)
+            ZStack {
+                RoundedRectangle(cornerRadius: HOS.rMd, style: .continuous)
+                    .fill(tint.opacity(0.16))
+                    .frame(width: 30, height: 30)
+                Image(systemName: symbol)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(tint)
+            }
             Text(value)
                 .font(.hosStat())
                 .foregroundStyle(.primary)
@@ -167,10 +260,6 @@ struct StatCard: View {
 
 // MARK: - Action label (icon-only no iOS, texto+ícone no macOS)
 
-/// Rótulo padrão de botão de ação. No iOS renderiza SOMENTE o ícone para
-/// economizar viewport (o texto vira `accessibilityLabel` p/ VoiceOver); no
-/// macOS, onde há espaço, mantém texto + ícone. Use no lugar de `Label(...)`
-/// dentro de `Button { } label:` para que a regra de plataforma fique num só lugar.
 struct ActionLabel: View {
     let title: String
     let systemImage: String
@@ -190,25 +279,53 @@ struct ActionLabel: View {
     }
 }
 
-// MARK: - Brand mark (mantém o m-icon do app)
+// MARK: - Marca connection-node (healthos-mark.svg) — desenhada nativamente
 
+/// Dois arcos (navy + azul) com 4 nós quadrados arredondados (N/S/L/O).
+/// Geometria fiel ao healthos-mark.svg (viewBox 100×100).
 struct BrandMark: View {
     var size: CGFloat = 22
+
     var body: some View {
-        // Usa o ícone do app (m-icon) empacotado; fallback para SF Symbol.
-        Group {
-            #if os(macOS)
-            if let img = NSImage(named: "AppIcon") {
-                Image(nsImage: img).resizable()
-            } else {
-                Image(systemName: "waveform.circle.fill").resizable()
+        Canvas { ctx, sz in
+            let s = sz.width / 100
+            func P(_ x: CGFloat, _ y: CGFloat) -> CGPoint { CGPoint(x: x * s, y: y * s) }
+            let lw = 11 * s
+
+            var navy = Path()
+            navy.move(to: P(50, 20))
+            navy.addQuadCurve(to: P(19, 50), control: P(24, 30))
+            navy.addQuadCurve(to: P(50, 80), control: P(24, 70))
+            ctx.stroke(navy, with: .color(HOS.navy), style: StrokeStyle(lineWidth: lw, lineCap: .round))
+
+            var blue = Path()
+            blue.move(to: P(50, 20))
+            blue.addQuadCurve(to: P(81, 50), control: P(76, 30))
+            blue.addQuadCurve(to: P(50, 80), control: P(76, 70))
+            ctx.stroke(blue, with: .color(HOS.blue), style: StrokeStyle(lineWidth: lw, lineCap: .round))
+
+            func node(_ x: CGFloat, _ y: CGFloat, _ c: Color) {
+                let rect = CGRect(x: x * s, y: y * s, width: 15 * s, height: 15 * s)
+                ctx.fill(Path(roundedRect: rect, cornerRadius: 4.5 * s), with: .color(c))
             }
-            #else
-            Image(systemName: "waveform.circle.fill").resizable()
-            #endif
+            node(42.5, 11.5, HOS.blue)
+            node(42.5, 73.5, HOS.blueBright)
+            node(9, 42.5, HOS.navy)
+            node(76, 42.5, HOS.blue)
         }
-        .scaledToFit()
         .frame(width: size, height: size)
-        .foregroundStyle(HOS.blue)
+        .accessibilityLabel("HealthOS")
+    }
+}
+
+// MARK: - Wash radial azul (fundo de dashboard / empty states)
+
+struct BlueWash: View {
+    var body: some View {
+        RadialGradient(
+            colors: [HOS.blue.opacity(0.09), .clear],
+            center: .topTrailing, startRadius: 0, endRadius: 520)
+        .ignoresSafeArea()
+        .allowsHitTesting(false)
     }
 }
