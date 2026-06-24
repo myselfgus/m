@@ -671,42 +671,43 @@ flowchart LR
 
 ## Deploy
 
-### Docker Compose
+### systemd no host (produção)
 
-```bash
-cp .env.example .env
-export M_BASE=/srv/m-engine/data   # volume PHI (cifrado) — obrigatório
-docker compose -f deploy/docker-compose.yml up -d --build
-```
-
-Sobe `redis`, `api` (uvicorn `:8000`) e `worker` (Celery), compartilhando o volume `$M_BASE`
-em `/var/lib/m-engine`. O worker **pré-aquece o prompt cache** ao subir.
+O M-Engine roda **direto no host via systemd — sem Docker**. O motivo: o provider `cc` reaproveita
+a **assinatura** do Claude Code (auth do sistema), então o **pipeline** roda sem crédito de API; o
+**assistente** usa a API (Sonnet 4.6 · `ANTHROPIC_API_KEY`). Três serviços: `redis-server` (broker),
+`m-engine-api` (uvicorn `:8000`) e `m-engine-worker` (Celery, que **pré-aquece o prompt cache** no boot).
 
 ```mermaid
 %%{init: {'theme':'base','themeVariables':{'fontFamily':'-apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",Arial,sans-serif','fontSize':'14px','primaryColor':'#EEF2F7','primaryTextColor':'#1C2533','lineColor':'#64748B','clusterBkg':'#F4F7FB','clusterBorder':'#94A3B8'}}}%%
 flowchart LR
-    APP["📱 app / curl"]:::ep --> api
-    subgraph docker["docker compose"]
-        api["api<br/><sub>uvicorn :8000</sub>"]:::proc
-        worker["worker<br/><sub>Celery (+ prewarm)</sub>"]:::infra
-        redis[(Redis)]:::infra
+    APP["📱 app / curl<br/><sub>via Tailscale 100.x</sub>"]:::ep --> api
+    subgraph host["VM Ubuntu · systemd no host"]
+        api["m-engine-api<br/><sub>uvicorn :8000</sub>"]:::proc
+        worker["m-engine-worker<br/><sub>Celery (+ prewarm)</sub>"]:::infra
+        redis[(redis-server)]:::infra
     end
     api -->|broker| redis
     worker -->|broker| redis
-    api -->|volume| vol[("/var/lib/m-engine<br/>= $M_BASE")]:::phi
-    worker -->|volume| vol
+    api -->|"$M_BASE"| vol[("Block Storage cifrado<br/>= $M_BASE")]:::phi
+    worker -->|"$M_BASE"| vol
+    EXT["☁ Anthropic<br/><sub>assinatura cc · API (assistente)</sub>"]:::ext
+    api --> EXT
+    worker --> EXT
     classDef ep fill:#1C3A63,color:#fff,stroke:none
     classDef proc fill:#3B82F6,color:#fff,stroke:none
     classDef infra fill:#64748B,color:#fff,stroke:none
+    classDef ext fill:#1E5BC6,color:#fff,stroke:none
     classDef phi fill:#1C2533,color:#CBD5E1,stroke:#2E5388
 ```
 
-### systemd (VM de produção)
-
 Unidades em `deploy/systemd/` (usuário `ubuntu`/`mengine`, `EnvironmentFile=/etc/m-engine.env`,
-`Restart=always`, hardening). Logs: `journalctl -u m-engine-api -f`. Atualizar:
+`Restart=always`, hardening). Logs e atualização:
 
 ```bash
+journalctl -u m-engine-api -f                 # logs ao vivo
+
+# atualizar: git pull → reinstala o pacote no venv → reinicia os serviços
 cd /opt/m-engine && git pull \
   && /home/ubuntu/m-venv/bin/pip install --force-reinstall --no-deps . \
   && sudo systemctl restart m-engine-worker m-engine-api
@@ -734,7 +735,7 @@ O **assistente** sempre usa a API — mantenha `ANTHROPIC_API_KEY` no `/etc/m-en
 <br/>
 
 - **Criptografia em repouso** do volume `$M_BASE` (LUKS/dm-crypt ou volume gerenciado); backups cifrados.
-- **Segredos só em env / secret manager**; `.env` no `.gitignore`; o `compose` **exige** `M_BASE` (sem default silencioso).
+- **Segredos só em env / secret manager**; `.env` no `.gitignore`; `M_BASE` definido explicitamente no `EnvironmentFile` (`/etc/m-engine.env`, `0600` root).
 - **API não exposta à internet**: privada via Tailscale (IP `100.x`) ou reverse proxy com TLS + auth; Redis sem porta pública.
 - **Assistente confinado**: shell/arquivos do agente restritos a `$M_BASE`; nada de PHI fora do volume.
 - **Privilégio mínimo**: serviços não-root; systemd com `ProtectSystem=strict`, `NoNewPrivileges`, `UMask=0077`.

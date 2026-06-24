@@ -9,11 +9,11 @@ nativo, e os LLMs servidos pela **assinatura Claude (Code) via `cc`** — sem cr
 > *Object Storage (bucket, protocolo S3 — produto nativo Magalu, não AWS)* guarda backups. Se a VM
 > morrer, recria-se sem perder dado: o estado mora no volume, não na VM.
 
-> **Por que systemd no host (e não Docker) aqui:** o provider `cc` roda `claude -p` reaproveitando a
+> **Por que systemd no host (e não Docker):** o provider `cc` roda `claude -p` reaproveitando a
 > **auth do sistema** (assinatura Max logada no host). Dentro de um container o `claude` e a auth não
 > existem, então o `cc` não funciona. Rodando como o usuário logado (`ubuntu`), o `cc` serve **todos
-> os stages** sem custo de API. (Docker Compose segue válido se você preferir usar **crédito de API**
-> — ver "Alternativa: Docker" no fim.)
+> os stages** sem custo de API. O assistente do app usa a **API** (Sonnet 4.6) — mantenha
+> `ANTHROPIC_API_KEY` no `/etc/m-engine.env`. **Este é o único runtime suportado; Docker foi descontinuado.**
 
 ```
 Mac / iPhone (app SwiftUI) ──Tailnet 100.x──▶ VM Magalu (Ubuntu)
@@ -203,14 +203,3 @@ cd /opt/m-engine && git pull && /home/ubuntu/m-venv/bin/pip install --force-rein
 - [ ] Backups versionados no bucket privado + snapshots do volume.
 - [ ] Redis só em `localhost` (sem porta pública).
 - [ ] systemd hardening: `NoNewPrivileges`, `PrivateTmp`, `ProtectSystem=strict`, `ReadWritePaths=/var/lib/m-data`.
-
----
-
-## Alternativa: Docker (usando crédito de API em vez de `cc`)
-
-Se preferir rodar em containers e **pagar API** (sem `cc`): mantenha `deploy/docker-compose.yml`
-(api + worker + redis), defina `M_BASE` e `M_API_BIND` (IP tailnet) e suba com
-`docker compose -f deploy/docker-compose.yml up -d --build`. Nesse modo o `cc` não funciona (o
-container não tem `claude`/auth), então use `ANTHROPIC_API_KEY` com crédito e **não** defina
-`M_FORCE_MODEL=cc`. Ajuste o dono do volume para o uid do container (`999`).
-```
