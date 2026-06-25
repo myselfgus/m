@@ -16,6 +16,7 @@ enum ClaudeModelID: String, Codable, CaseIterable, Identifiable {
         case .haiku45: return "Haiku 4.5"
         }
     }
+    var displayName: String { label }
     /// Opus 4.8 usa adaptive thinking e NÃO aceita parâmetros de sampling.
     var acceptsSampling: Bool { self != .opus48 }
 }
@@ -48,6 +49,12 @@ struct AgentDefinition: Codable, Identifiable, Equatable, Hashable {
     enum PermissionMode: String, Codable, CaseIterable, Identifiable {
         case ask, acceptReads, acceptAll
         var id: String { rawValue }
+    }
+
+    /// Nome curto p/ pickers compactos (antes do " — ", senão a 1ª palavra).
+    var shortName: String {
+        if let head = name.components(separatedBy: " — ").first, head != name { return head }
+        return name.components(separatedBy: " ").first ?? name
     }
 }
 

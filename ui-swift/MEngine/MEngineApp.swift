@@ -14,21 +14,11 @@ struct MEngineApp: App {
         #endif
 
         #if os(macOS)
-        // Janela flutuante do assistente — movível, redimensionável, não ocupa o dashboard.
-        Window("Assistente", id: "assistant") {
-            AssistantChatScreen()
-                .environmentObject(settings)
-                .frame(minWidth: 360, minHeight: 420)
+        // Presença na barra de menus: o mesmo painel conversacional (superfície expansível).
+        MenuBarExtra("Assistente M-Engine", systemImage: "sparkle.magnifyingglass") {
+            MenuBarAgentView()
         }
-        .defaultSize(width: 420, height: 600)
-        .windowResizability(.contentMinSize)
-        .keyboardShortcut("j", modifiers: .command)
-
-        // Presença na barra de menus: abre a janela flutuante (não some ao tirar o mouse).
-        MenuBarExtra("Assistente M-Engine", systemImage: "sparkles") {
-            AssistantMenuBar()
-        }
-        .menuBarExtraStyle(.menu)
+        .menuBarExtraStyle(.window)
         #endif
     }
 }

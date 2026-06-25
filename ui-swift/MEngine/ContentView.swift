@@ -25,8 +25,7 @@ struct ContentView: View {
     /// Erro de exclusão a exibir (alerta).
     @State private var deleteError: String?
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
-    @Environment(\.openWindow) private var openWindow
-    @State private var showAssistantSheet = false
+    @State private var assistantExpanded = false
 
     /// Slug do paciente selecionado (ou nil em Início/Nova sessão).
     private var currentSlug: String? {
@@ -49,22 +48,23 @@ struct ContentView: View {
         } detail: {
             detail
         }
+        // Assistente: superfície expansível (ícone → painel) flutuando sobre o dashboard.
+        .overlay(alignment: .bottomTrailing) {
+            ExpandableAgentSurface(isExpanded: $assistantExpanded, context: .dashboard)
+                .padding(24)
+        }
         .toolbar {
             ToolbarItem {
                 Button { showNewPatient = true } label: { Image(systemName: "person.badge.plus") }
                     .help("Novo paciente")
             }
             ToolbarItem {
-                Button { openAssistant() } label: { Image(systemName: "sparkles") }
-                    .help("Assistente")
+                Button { withAnimation(.agentExpansion) { assistantExpanded.toggle() } } label: {
+                    Image(systemName: "sparkle.magnifyingglass")
+                }
+                .help("Assistente")
             }
         }
-        #if os(iOS)
-        .sheet(isPresented: $showAssistantSheet) {
-            AssistantChatScreen().environmentObject(settings)
-                .presentationDragIndicator(.visible)
-        }
-        #endif
         .task { await loadPatients() }
         .sheet(isPresented: $showSettings) { SettingsView() }
         .sheet(isPresented: $showNewPatient) {
@@ -107,14 +107,6 @@ struct ContentView: View {
         Binding(get: { deleteError != nil }, set: { if !$0 { deleteError = nil } })
     }
 
-    /// Abre o assistente: janela flutuante (macOS) ou sheet (iOS).
-    private func openAssistant() {
-        #if os(macOS)
-        openWindow(id: "assistant")
-        #else
-        showAssistantSheet = true
-        #endif
-    }
 
     /// Ações de gerenciamento de um paciente (menu de contexto da sidebar).
     @ViewBuilder

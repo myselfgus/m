@@ -14,6 +14,9 @@ final class ChatViewModel {
     var isStreaming = false
     var errorText: String?
     var selectedAgent: AgentDefinition
+    var composerText = ""
+    var tokenUsage = ""
+    let agents: [AgentDefinition] = AgentSeeds.all
 
     private let transport: AgentTransport
     private var streamTask: Task<Void, Never>?
@@ -24,6 +27,17 @@ final class ChatViewModel {
     }
 
     var canSend: Bool { !isStreaming }
+
+    /// Envia o texto do composer (usado pela UI nova).
+    func submitComposer() {
+        let t = composerText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty else { return }
+        send(t)
+        composerText = ""
+    }
+
+    func stopStreaming() { stop() }
+    func resetConversation() { clear() }
 
     func send(_ userText: String) {
         let text = userText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -76,8 +90,8 @@ final class ChatViewModel {
             }
         case .citation:
             break
-        case .usage:
-            break
+        case .usage(let input, let output):
+            if input > 0 || output > 0 { tokenUsage = "\(input)→\(output) tok" }
         case .stopped:
             flushStreamingIntoMessage(reason: "end_turn")
             isStreaming = false
