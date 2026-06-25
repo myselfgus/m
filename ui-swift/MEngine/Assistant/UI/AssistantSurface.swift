@@ -1,113 +1,23 @@
 import SwiftUI
 
-// MARK: - Superfície expansível do assistente (ícone → painel) com morph de Liquid Glass.
-// Adaptada ao ChatViewModel (transporte B / Messages API direta). Skills: swiftui-liquid-glass,
-// swiftui-patterns, swiftui-performance.
+// MARK: - Coluna do assistente (inspector colapsável no dashboard).
+// Sem orb, sem morph, sem menubar: uma coluna lateral que recolhe (escondida) ↔ expande (chat).
+// Adaptada ao ChatViewModel (transporte B / Messages API direta). Skills: swiftui-patterns.
 
-enum AgentSurfaceContext {
-    case dashboard, menuBar
-    var expandedSize: CGSize {
-        switch self {
-        case .dashboard: CGSize(width: 720, height: 620)
-        case .menuBar:   CGSize(width: 430, height: 620)
-        }
-    }
-    var collapsedSize: CGSize {
-        switch self {
-        case .dashboard: CGSize(width: 64, height: 64)
-        case .menuBar:   CGSize(width: 64, height: 64)
-        }
-    }
-}
-
-struct ExpandableAgentSurface: View {
-    @Binding var isExpanded: Bool
-    let context: AgentSurfaceContext
+/// Entrada pública: a conversa completa do assistente, pronta para viver num `.inspector`
+/// (macOS) ou numa `.sheet` (iOS). Dona do seu próprio `ChatViewModel`.
+struct AssistantColumn: View {
     @State private var vm = ChatViewModel(transport: MessagesAPITransport(), agent: AgentSeeds.clinico)
-    @Namespace private var glassNS
-
-    var body: some View {
-        GlassEffectContainerCompat {
-            Group {
-                if isExpanded {
-                    AgentPanelView(vm: vm, isExpanded: $isExpanded, context: context)
-                        .frame(width: context.expandedSize.width, height: context.expandedSize.height)
-                        .regularGlass(cornerRadius: 28, interactive: true)
-                        .glassMorphID("agent-surface", in: glassNS)
-                        .transition(.scale(scale: 0.86, anchor: .bottomTrailing).combined(with: .opacity))
-                } else {
-                    LauncherButton(isStreaming: vm.isStreaming) {
-                        withAnimation(.agentExpansion) { isExpanded = true }
-                    }
-                    .frame(width: context.collapsedSize.width, height: context.collapsedSize.height)
-                    .regularGlass(cornerRadius: context.collapsedSize.width / 2, interactive: true)
-                    .glassMorphID("agent-surface", in: glassNS)
-                    .transition(.scale(scale: 0.9).combined(with: .opacity))
-                }
-            }
-        }
-        .animation(.agentExpansion, value: isExpanded)
-    }
-}
-
-// MARK: - Compat: GlassEffectContainer + glassEffectID (macOS 26) com fallback.
-
-struct GlassEffectContainerCompat<Content: View>: View {
-    @ViewBuilder var content: Content
-    var body: some View {
-        if #available(macOS 26, iOS 26, *) {
-            GlassEffectContainer { content }
-        } else {
-            content
-        }
-    }
-}
-
-extension View {
-    @ViewBuilder
-    func glassMorphID(_ id: String, in ns: Namespace.ID) -> some View {
-        if #available(macOS 26, iOS 26, *) { glassEffectID(id, in: ns) } else { self }
-    }
-}
-
-private struct LauncherButton: View {
-    let isStreaming: Bool
-    let action: () -> Void
-    var body: some View {
-        Button(action: action) {
-            ZStack(alignment: .topTrailing) {
-                Image(systemName: "sparkle.magnifyingglass")
-                    .font(.system(size: 26, weight: .semibold))
-                    .symbolRenderingMode(.hierarchical)
-                    .foregroundStyle(HOS.blue)
-                if isStreaming {
-                    Circle().fill(HOS.complete).frame(width: 11, height: 11).offset(x: 6, y: -5)
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .contentShape(Circle())
-        }
-        .buttonStyle(.plain)
-        .help("Abrir assistente")
-        .accessibilityLabel("Abrir assistente")
-    }
-}
-
-// MARK: - Painel
-
-struct AgentPanelView: View {
-    @Bindable var vm: ChatViewModel
-    @Binding var isExpanded: Bool
-    let context: AgentSurfaceContext
 
     var body: some View {
         VStack(spacing: 0) {
-            PanelHeader(vm: vm, isExpanded: $isExpanded, context: context)
+            AssistantHeader(vm: vm)
             Divider().opacity(0.28)
             if !KeychainCredentialStore().hasAPIKey { keyBanner }
             MessageTimeline(vm: vm).frame(maxWidth: .infinity, maxHeight: .infinity)
             ComposerView(vm: vm).padding(14)
         }
+        .background(.bar)
     }
 
     private var keyBanner: some View {
@@ -121,37 +31,42 @@ struct AgentPanelView: View {
     }
 }
 
-private struct PanelHeader: View {
+// MARK: - Cabeçalho
+
+private struct AssistantHeader: View {
     @Bindable var vm: ChatViewModel
-    @Binding var isExpanded: Bool
-    let context: AgentSurfaceContext
 
     var body: some View {
-        HStack(spacing: 12) {
-            Image(systemName: "sparkle.magnifyingglass").font(.title3.weight(.semibold)).foregroundStyle(HOS.blue)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Assistente").font(.headline)
-                Text(vm.selectedAgent.model.displayName).font(.caption).foregroundStyle(.secondary)
+        VStack(spacing: 10) {
+            HStack(spacing: 12) {
+                Image(systemName: "sparkle.magnifyingglass")
+                    .font(.title3.weight(.semibold)).foregroundStyle(HOS.blue)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Assistente").font(.headline)
+                    Text(vm.selectedAgent.model.displayName).font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                if !vm.tokenUsage.isEmpty {
+                    Text(vm.tokenUsage).font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
+                }
+                if !vm.messages.isEmpty {
+                    Button { vm.resetConversation() } label: { Image(systemName: "plus.message") }
+                        .buttonStyle(.borderless).help("Novo fio")
+                }
             }
-            Spacer()
-            if !vm.tokenUsage.isEmpty {
-                Text(vm.tokenUsage).font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
+            HStack {
+                Picker("Agente", selection: $vm.selectedAgent) {
+                    ForEach(vm.agents) { Text($0.shortName).tag($0) }
+                }
+                .labelsHidden().pickerStyle(.menu)
+                Spacer()
             }
-            Picker("Agente", selection: $vm.selectedAgent) {
-                ForEach(vm.agents) { Text($0.shortName).tag($0) }
-            }
-            .labelsHidden().pickerStyle(.menu)
-            .frame(maxWidth: context == .menuBar ? 120 : 170)
-            if !vm.messages.isEmpty {
-                Button { vm.resetConversation() } label: { Image(systemName: "plus.message") }
-                    .buttonStyle(.borderless).help("Novo fio")
-            }
-            Button { withAnimation(.agentExpansion) { isExpanded = false } } label: { Image(systemName: "xmark") }
-                .buttonStyle(.borderless).help("Recolher").keyboardShortcut(.cancelAction)
         }
         .padding(.horizontal, 18).padding(.vertical, 14)
     }
 }
+
+// MARK: - Timeline
 
 private struct MessageTimeline: View {
     @Bindable var vm: ChatViewModel
@@ -191,15 +106,15 @@ private struct MessageBubble: View {
     let message: ChatMessage
     var body: some View {
         HStack {
-            if message.role == .user { Spacer(minLength: 40) }
+            if message.role == .user { Spacer(minLength: 24) }
             MarkdownText(text: message.text)
                 .font(.body).textSelection(.enabled)
-                .padding(14).frame(maxWidth: 560, alignment: .leading)
+                .padding(14).frame(maxWidth: 520, alignment: .leading)
                 .background {
                     RoundedRectangle(cornerRadius: 18, style: .continuous)
                         .fill(message.role == .user ? HOS.blue.opacity(0.14) : Color.primary.opacity(0.055))
                 }
-            if message.role != .user { Spacer(minLength: 40) }
+            if message.role != .user { Spacer(minLength: 24) }
         }
     }
 }
@@ -235,6 +150,8 @@ private struct ErrorRow: View {
     }
 }
 
+// MARK: - Composer
+
 struct ComposerView: View {
     @Bindable var vm: ChatViewModel
     @FocusState private var focused: Bool
@@ -258,17 +175,3 @@ struct ComposerView: View {
         .onAppear { focused = true }
     }
 }
-
-// MARK: - Presença na menubar (mesma superfície, sempre expandida)
-
-#if os(macOS)
-struct MenuBarAgentView: View {
-    @State private var isExpanded = true
-    var body: some View {
-        ExpandableAgentSurface(isExpanded: $isExpanded, context: .menuBar)
-            .padding(12)
-            .frame(width: 454, height: 640)
-            .onAppear { isExpanded = true }
-    }
-}
-#endif

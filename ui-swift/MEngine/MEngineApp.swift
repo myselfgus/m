@@ -12,13 +12,5 @@ struct MEngineApp: App {
         #if os(macOS)
         .defaultSize(width: 1100, height: 720)
         #endif
-
-        #if os(macOS)
-        // Presença na barra de menus: o mesmo painel conversacional (superfície expansível).
-        MenuBarExtra("Assistente M-Engine", systemImage: "sparkle.magnifyingglass") {
-            MenuBarAgentView()
-        }
-        .menuBarExtraStyle(.window)
-        #endif
     }
 }

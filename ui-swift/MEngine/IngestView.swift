@@ -24,11 +24,10 @@ struct NewSessionView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Nova sessão").font(.hosLargeTitle)
-                    Text("Áudio → transcrição → BIRP ∥ ASL · VDLP · GEM · SOAP").font(.hosBody).foregroundStyle(.secondary)
-                }
+            VStack(alignment: .leading, spacing: HOS.s5) {
+                SheetHeader("Nova sessão",
+                            subtitle: "Áudio → transcrição → BIRP ∥ ASL · VDLP · GEM · SOAP",
+                            systemImage: "waveform.badge.mic", tint: HOS.stSpeech)
 
                 pipelineTrack
                 recordingCard
@@ -71,16 +70,19 @@ struct NewSessionView: View {
     private var recordingCard: some View {
         VStack(alignment: .leading, spacing: 12) {
             Label("Gravar", systemImage: "mic.fill").font(.hosTitle3).foregroundStyle(HOS.stSpeech)
-            HStack(spacing: 14) {
+            HStack(spacing: HOS.s4) {
                 Button {
                     Task { recorder.isRecording ? stopRecording() : await recorder.start() }
                 } label: {
-                    ActionLabel(recorder.isRecording ? "Parar" : "Gravar",
-                                systemImage: recorder.isRecording ? "stop.circle.fill" : "record.circle")
+                    Image(systemName: recorder.isRecording ? "stop.fill" : "mic.fill")
+                        .font(.system(size: 20, weight: .semibold))
+                        .frame(width: 54, height: 54)
+                        .contentShape(Circle())
                 }
                 .buttonStyle(.borderedProminent)
+                .clipShape(Circle())
                 .tint(recorder.isRecording ? HOS.error : HOS.blue)
-                .controlSize(.large)
+                .accessibilityLabel(recorder.isRecording ? "Parar" : "Gravar")
 
                 if recorder.isRecording {
                     StatusPill(text: "Gravando", color: HOS.error, systemImage: "waveform")

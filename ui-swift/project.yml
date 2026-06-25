@@ -18,10 +18,22 @@ options:
     iOS: "17.0"
   createIntermediateGroups: true
 
+# MarkdownUI: renderização rica de Markdown (GFM, código, tabelas) compartilhada
+# entre macOS (Package.swift) e iOS. NOTA: a 1ª opção SwiftStreamingMarkdown é
+# iOS-only/UIKit e não compila no executável macOS, então usamos MarkdownUI nos
+# dois alvos. LaTeX fica pendente (lib separada cross-platform).
+packages:
+  MarkdownUI:
+    url: https://github.com/gonzalezreal/swift-markdown-ui
+    from: "2.4.1"
+
 targets:
   MEngine:
     type: application
     platform: iOS
+    dependencies:
+      - package: MarkdownUI
+        product: MarkdownUI
     sources:
       - path: MEngine
         # Recursos do macOS / plists não entram na compilação iOS.

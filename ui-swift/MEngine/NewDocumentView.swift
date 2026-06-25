@@ -28,7 +28,7 @@ struct NewDocumentView: View {
             header
 
             VStack(alignment: .leading, spacing: 6) {
-                Text("NOME DO ARQUIVO").font(.hosSubhead).foregroundStyle(.secondary)
+                FieldLabel("Nome do arquivo")
                 TextField("NOTA.md", text: $name)
                     .textFieldStyle(.roundedBorder)
                     .font(.hosMono)
@@ -39,7 +39,7 @@ struct NewDocumentView: View {
             }
 
             VStack(alignment: .leading, spacing: 6) {
-                Text("CONTEÚDO").font(.hosSubhead).foregroundStyle(.secondary)
+                FieldLabel("Conteúdo")
                 TextEditor(text: $content)
                     .font(.hosMono)
                     .scrollContentBackground(.hidden)
@@ -65,11 +65,7 @@ struct NewDocumentView: View {
     }
 
     private var header: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "doc.badge.plus")
-                .font(.system(size: 22)).foregroundStyle(HOS.blue)
-            Text("Novo documento").font(.hosTitle1)
-            Spacer()
+        SheetHeader("Novo documento", systemImage: "doc.badge.plus") {
             StatusPill(text: consultationId, color: HOS.navy, systemImage: "calendar")
         }
     }

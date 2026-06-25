@@ -7,9 +7,19 @@ import PackageDescription
 let package = Package(
     name: "MEngineApp",
     platforms: [.macOS(.v14)],
+    dependencies: [
+        // MarkdownUI: GFM rich rendering (headings, lists, tables, fenced code).
+        // SwiftStreamingMarkdown (a 1ª opção) é iOS-only e usa iosMath/UIKit — não
+        // compila no executável macOS. MarkdownUI suporta macOS 12+ e iOS 15+.
+        // LaTeX NÃO é coberto (precisa de lib separada — pendente).
+        .package(url: "https://github.com/gonzalezreal/swift-markdown-ui", from: "2.4.1")
+    ],
     targets: [
         .executableTarget(
             name: "MEngineApp",
+            dependencies: [
+                .product(name: "MarkdownUI", package: "swift-markdown-ui")
+            ],
             path: "MEngine",
             exclude: ["Info.plist"],
             linkerSettings: [

@@ -191,9 +191,8 @@ struct HomeView: View {
                 .foregroundStyle(.secondary)
                 .padding(.bottom, 2)
 
-            HairlineList {
-                ForEach(Array(needsAttention.prefix(5).enumerated()), id: \.element.id) { idx, item in
-                    if idx > 0 { rowSeparator }
+            VStack(spacing: HOS.s2) {
+                ForEach(needsAttention.prefix(5)) { item in
                     Button { onOpenPatient(item.slug) } label: {
                         attentionRow(item)
                     }
@@ -204,28 +203,16 @@ struct HomeView: View {
     }
 
     private func attentionRow(_ item: RecentConsultation) -> some View {
-        HStack(spacing: 12) {
-            Image(systemName: "exclamationmark.circle.fill")
-                .font(.system(size: 18))
-                .foregroundStyle(HOS.review)
-                .frame(width: 22)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(item.displayName)
-                    .font(.hosHeadline)
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                consultationSubtitle(item)
+        GlassRow(title: item.displayName) {
+            IconBadge(systemImage: "exclamationmark.circle.fill", tint: HOS.review)
+        } subtitle: {
+            consultationSubtitle(item)
+        } trailing: {
+            HStack(spacing: 8) {
+                StatusPill(text: "Sem análise", color: HOS.review)
+                chevron
             }
-
-            Spacer(minLength: 8)
-
-            StatusPill(text: "Sem análise", color: HOS.review)
-            chevron
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 11)
-        .contentShape(Rectangle())
     }
 
     // MARK: - Consultas recentes
@@ -245,9 +232,8 @@ struct HomeView: View {
             } else if recents.isEmpty {
                 emptyState
             } else {
-                HairlineList {
-                    ForEach(Array(recents.enumerated()), id: \.element.id) { idx, item in
-                        if idx > 0 { rowSeparator }
+                VStack(spacing: HOS.s2) {
+                    ForEach(recents) { item in
                         Button { onOpenPatient(item.slug) } label: {
                             recentRow(item)
                         }
@@ -259,27 +245,16 @@ struct HomeView: View {
     }
 
     private func recentRow(_ item: RecentConsultation) -> some View {
-        HStack(spacing: 12) {
-            Image(systemName: "person.crop.circle.fill")
-                .font(.system(size: 26))
-                .foregroundStyle(HOS.navy, HOS.blue.opacity(0.16))
-
-            VStack(alignment: .leading, spacing: 3) {
-                Text(item.displayName)
-                    .font(.hosHeadline)
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                consultationSubtitle(item)
+        GlassRow(title: item.displayName) {
+            IconBadge(systemImage: "person.fill", tint: HOS.blue)
+        } subtitle: {
+            consultationSubtitle(item)
+        } trailing: {
+            HStack(spacing: 8) {
+                docChips(for: item)
+                chevron
             }
-
-            Spacer(minLength: 8)
-
-            docChips(for: item)
-            chevron
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 11)
-        .contentShape(Rectangle())
     }
 
     /// Subtítulo de linha: Cn · data.
@@ -325,55 +300,31 @@ struct HomeView: View {
             .foregroundStyle(.tertiary)
     }
 
-    /// Separador hairline entre linhas, recuado para deixar respirar.
-    private var rowSeparator: some View {
-        Rectangle()
-            .fill(HOS.divider)
-            .frame(height: 1)
-            .padding(.leading, 14)
-    }
-
     // MARK: - Estados (loading / vazio)
 
     private var loadingState: some View {
-        HairlineList {
-            ForEach(0..<3, id: \.self) { idx in
-                if idx > 0 { rowSeparator }
-                HStack(spacing: 12) {
-                    Circle()
-                        .fill(HOS.divider)
-                        .frame(width: 26, height: 26)
-                    VStack(alignment: .leading, spacing: 5) {
-                        RoundedRectangle(cornerRadius: 3)
-                            .fill(HOS.divider)
-                            .frame(width: 140, height: 11)
-                        RoundedRectangle(cornerRadius: 3)
-                            .fill(HOS.divider)
-                            .frame(width: 80, height: 9)
-                    }
-                    Spacer()
+        VStack(spacing: HOS.s2) {
+            ForEach(0..<3, id: \.self) { _ in
+                GlassRow(title: "Carregando paciente", subtitle: "C0 · ————") {
+                    Circle().fill(HOS.divider).frame(width: 34, height: 34)
+                } trailing: {
+                    EmptyView()
                 }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 12)
             }
-        }
-        .overlay(alignment: .bottom) {
             HStack(spacing: 8) {
                 ProgressView().controlSize(.small)
                 Text("Carregando arquivo clínico…")
                     .font(.hosFootnote)
                     .foregroundStyle(.secondary)
             }
-            .padding(.vertical, 10)
+            .padding(.top, HOS.s1)
         }
         .redacted(reason: .placeholder)
     }
 
     private var emptyState: some View {
         VStack(spacing: 12) {
-            Image(systemName: "tray")
-                .font(.system(size: 28, weight: .light))
-                .foregroundStyle(HOS.blue.opacity(0.7))
+            IconBadge(systemImage: "tray", tint: HOS.blue, size: 56)
             Text("Nenhuma consulta ainda")
                 .font(.hosTitle3)
                 .foregroundStyle(.primary)
@@ -398,10 +349,10 @@ struct HomeView: View {
         .padding(.vertical, 40)
         .padding(.horizontal, 16)
         .background {
-            RoundedRectangle(cornerRadius: HOS.rLg, style: .continuous)
+            RoundedRectangle(cornerRadius: HOS.rXxl, style: .continuous)
                 .fill(HOS.contentSurface)
                 .overlay(
-                    RoundedRectangle(cornerRadius: HOS.rLg, style: .continuous)
+                    RoundedRectangle(cornerRadius: HOS.rXxl, style: .continuous)
                         .strokeBorder(HOS.hairline, lineWidth: 0.75)
                 )
         }

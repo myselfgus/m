@@ -25,7 +25,8 @@ struct ContentView: View {
     /// Erro de exclusão a exibir (alerta).
     @State private var deleteError: String?
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
-    @State private var assistantExpanded = false
+    /// Visibilidade da coluna do assistente (inspector no macOS, sheet no iOS). Persistida.
+    @AppStorage("m_show_assistant") private var showAssistant = true
 
     /// Slug do paciente selecionado (ou nil em Início/Nova sessão).
     private var currentSlug: String? {
@@ -48,23 +49,28 @@ struct ContentView: View {
         } detail: {
             detail
         }
-        // Assistente: superfície expansível (ícone → painel) flutuando sobre o dashboard.
-        .overlay(alignment: .bottomTrailing) {
-            ExpandableAgentSurface(isExpanded: $assistantExpanded, context: .dashboard)
-                .padding(24)
+        // Assistente: coluna lateral colapsável (inspector no macOS, sheet no iOS).
+        #if os(macOS)
+        .inspector(isPresented: $showAssistant) {
+            AssistantColumn()
+                .inspectorColumnWidth(min: 320, ideal: 360, max: 520)
         }
+        #endif
         .toolbar {
             ToolbarItem {
                 Button { showNewPatient = true } label: { Image(systemName: "person.badge.plus") }
                     .help("Novo paciente")
             }
             ToolbarItem {
-                Button { withAnimation(.agentExpansion) { assistantExpanded.toggle() } } label: {
+                Button { showAssistant.toggle() } label: {
                     Image(systemName: "sparkle.magnifyingglass")
                 }
                 .help("Assistente")
             }
         }
+        #if os(iOS)
+        .sheet(isPresented: $showAssistant) { AssistantColumn() }
+        #endif
         .task { await loadPatients() }
         .sheet(isPresented: $showSettings) { SettingsView() }
         .sheet(isPresented: $showNewPatient) {

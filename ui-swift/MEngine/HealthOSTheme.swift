@@ -72,6 +72,26 @@ enum HOS {
     static let rMd: CGFloat = 8
     static let rLg: CGFloat = 12
     static let rXl: CGFloat = 16
+    static let rXxl: CGFloat = 20   // Liquid Glass arredondado (cards/rows da linguagem refrescada)
+    static let rRow: CGFloat = 14   // raio de linha de lista (glass row)
+
+    // ─── Espaçamento (grade de 8 pt) ────────────────────────────────────
+    static let s1: CGFloat = 4
+    static let s2: CGFloat = 8
+    static let s3: CGFloat = 12
+    static let s4: CGFloat = 16
+    static let s5: CGFloat = 20
+    static let s6: CGFloat = 24
+    static let s7: CGFloat = 28
+    static let s8: CGFloat = 32
+
+    // ─── Tiles planos (superfície de conteúdo achatada) ─────────────────
+    /// Preenchimento de tile plano calmo (Claude-desktop): leve, content-first.
+    static func tileFill(selected: Bool = false) -> Color {
+        selected ? blue.opacity(0.10) : Color.primary.opacity(0.05)
+    }
+    /// Borda de um tile selecionado (realce sutil verde/azul).
+    static let selectedHairline = blue.opacity(0.35)
 
     /// Tint do stage/documento por palavra-chave (nome do artefato ou stage).
     static func tint(forStage s: String) -> Color {
@@ -446,10 +466,144 @@ struct BrandMark: View {
 
 struct BlueWash: View {
     var body: some View {
-        RadialGradient(
-            colors: [HOS.blue.opacity(0.09), .clear],
-            center: .topTrailing, startRadius: 0, endRadius: 520)
+        // Um único floreio de baixa opacidade: window background → tint azul/indigo/teal.
+        // Mantido sutil (content-first); o radial dá profundidade sem competir com o conteúdo.
+        ZStack {
+            LinearGradient(
+                colors: [.clear, HOS.tintIndigo.opacity(0.045), HOS.tintTeal.opacity(0.03)],
+                startPoint: .top, endPoint: .bottom)
+            RadialGradient(
+                colors: [HOS.blue.opacity(0.10), .clear],
+                center: .topTrailing, startRadius: 0, endRadius: 560)
+        }
         .ignoresSafeArea()
         .allowsHitTesting(false)
+    }
+}
+
+// MARK: - Glass row (linha de lista arredondada — linguagem refrescada)
+
+/// Linha de lista como superfície de vidro arredondada: ícone (em badge circular
+/// opcional) + título headline + legenda secundária + acessório à direita.
+/// Espaçamento generoso de 8 pt. Base das listas do dashboard e do detalhe.
+struct GlassRow<Leading: View, Subtitle: View, Trailing: View>: View {
+    var selected: Bool = false
+    let leading: Leading
+    let title: String
+    let subtitle: Subtitle
+    let trailing: Trailing
+
+    init(title: String, selected: Bool = false,
+         @ViewBuilder leading: () -> Leading,
+         @ViewBuilder subtitle: () -> Subtitle,
+         @ViewBuilder trailing: () -> Trailing) {
+        self.title = title
+        self.selected = selected
+        self.leading = leading()
+        self.subtitle = subtitle()
+        self.trailing = trailing()
+    }
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: HOS.rRow, style: .continuous)
+        HStack(spacing: HOS.s3) {
+            leading
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.hosHeadline).foregroundStyle(.primary).lineLimit(1)
+                subtitle
+            }
+            Spacer(minLength: HOS.s2)
+            trailing
+        }
+        .padding(.horizontal, HOS.s3)
+        .padding(.vertical, 11)
+        .background(HOS.tileFill(selected: selected), in: shape)
+        .overlay(shape.strokeBorder(selected ? HOS.selectedHairline : HOS.hairline, lineWidth: 0.75))
+        .contentShape(Rectangle())
+    }
+}
+
+extension GlassRow where Subtitle == _GlassRowText {
+    init(title: String, subtitle: String? = nil, selected: Bool = false,
+         @ViewBuilder leading: () -> Leading,
+         @ViewBuilder trailing: () -> Trailing) {
+        self.init(title: title, selected: selected, leading: leading,
+                  subtitle: { _GlassRowText(text: subtitle) }, trailing: trailing)
+    }
+}
+
+/// Legenda textual padrão de uma GlassRow (caption, secundária).
+struct _GlassRowText: View {
+    let text: String?
+    var body: some View {
+        if let text { Text(text).font(.hosCaption).foregroundStyle(.secondary).lineLimit(1) }
+    }
+}
+
+// MARK: - Badge de ícone circular (avatar/glyph de linha)
+
+/// Glyph SF Symbol num disco tint suave — o acessório-líder das glass rows.
+struct IconBadge: View {
+    let systemImage: String
+    var tint: Color = HOS.blue
+    var size: CGFloat = 34
+    var body: some View {
+        Image(systemName: systemImage)
+            .font(.system(size: size * 0.42, weight: .semibold))
+            .foregroundStyle(tint)
+            .frame(width: size, height: size)
+            .background(tint.opacity(0.14), in: Circle())
+    }
+}
+
+// MARK: - Cabeçalho de folha (sheet) — ícone em badge + título + legenda
+
+/// Cabeçalho consistente para as folhas (Novo paciente, Nova consulta, etc.):
+/// badge circular do ícone + título + legenda opcional + acessório à direita.
+struct SheetHeader<Trailing: View>: View {
+    let title: String
+    var subtitle: String? = nil
+    let systemImage: String
+    var tint: Color = HOS.blue
+    let trailing: Trailing
+
+    init(_ title: String, subtitle: String? = nil, systemImage: String,
+         tint: Color = HOS.blue, @ViewBuilder trailing: () -> Trailing) {
+        self.title = title
+        self.subtitle = subtitle
+        self.systemImage = systemImage
+        self.tint = tint
+        self.trailing = trailing()
+    }
+
+    var body: some View {
+        HStack(spacing: HOS.s3) {
+            IconBadge(systemImage: systemImage, tint: tint, size: 38)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title).font(.hosTitle1).foregroundStyle(.primary)
+                if let subtitle {
+                    Text(subtitle).font(.hosFootnote).foregroundStyle(.secondary)
+                }
+            }
+            Spacer(minLength: HOS.s2)
+            trailing
+        }
+    }
+}
+
+extension SheetHeader where Trailing == EmptyView {
+    init(_ title: String, subtitle: String? = nil, systemImage: String, tint: Color = HOS.blue) {
+        self.init(title, subtitle: subtitle, systemImage: systemImage, tint: tint) { EmptyView() }
+    }
+}
+
+/// Rótulo de campo de formulário padronizado (uppercase, subhead, secundário).
+struct FieldLabel: View {
+    let text: String
+    init(_ text: String) { self.text = text }
+    var body: some View {
+        Text(text.uppercased())
+            .font(.hosSubhead)
+            .foregroundStyle(.secondary)
     }
 }

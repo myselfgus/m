@@ -189,9 +189,7 @@ struct PatientDetailView: View {
 
     private var header: some View {
         HStack(alignment: .top, spacing: 14) {
-            Image(systemName: "person.crop.circle.fill")
-                .font(.system(size: 48))
-                .foregroundStyle(HOS.navy, HOS.blue.opacity(0.16))
+            IconBadge(systemImage: "person.fill", tint: HOS.blue, size: 52)
             VStack(alignment: .leading, spacing: 6) {
                 Text(profile?.displayName ?? slug).font(.hosTitle1).foregroundStyle(.primary)
                 Text(slug).font(.hosMono).foregroundStyle(.secondary)
@@ -359,20 +357,17 @@ struct PatientDetailView: View {
     }
 
     private func documentRow(_ name: String) -> some View {
-        HStack(spacing: 12) {
-            Image(systemName: icon(for: name))
-                .font(.system(size: 18))
-                .foregroundStyle(HOS.tint(forStage: name))
-                .frame(width: 26)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title(for: name)).font(.hosHeadline).foregroundStyle(.primary)
-                Text(name).font(.hosCaption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+        GlassRow(title: title(for: name)) {
+            IconBadge(systemImage: icon(for: name), tint: HOS.tint(forStage: name))
+        } subtitle: {
+            Text(name).font(.hosCaption).foregroundStyle(.secondary)
+                .lineLimit(1).truncationMode(.middle)
+        } trailing: {
+            HStack(spacing: 8) {
+                StatusPill(text: kind(for: name), color: HOS.tint(forStage: name))
+                Image(systemName: "chevron.right").foregroundStyle(.tertiary).font(.caption)
             }
-            Spacer()
-            StatusPill(text: kind(for: name), color: HOS.tint(forStage: name))
-            Image(systemName: "chevron.right").foregroundStyle(.tertiary).font(.caption)
         }
-        .healthCard(padding: 12)
     }
 
     // MARK: - Helpers
@@ -842,11 +837,7 @@ struct ProfileEditorView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            HStack(spacing: 10) {
-                Image(systemName: "person.text.rectangle.fill")
-                    .font(.system(size: 22)).foregroundStyle(HOS.blue)
-                Text("Editar perfil").font(.hosTitle1)
-                Spacer()
+            SheetHeader("Editar perfil", systemImage: "person.text.rectangle.fill") {
                 Text(profile.slug).font(.hosMono).foregroundStyle(.secondary)
             }
 
@@ -856,7 +847,7 @@ struct ProfileEditorView: View {
             field("TELEFONE", text: optionalBinding(\.phone), keyboard: .phonePad)
 
             VStack(alignment: .leading, spacing: 6) {
-                Text("IDADE").font(.hosSubhead).foregroundStyle(.secondary)
+                FieldLabel("Idade")
                 TextField("anos", text: $ageText)
                     .textFieldStyle(.roundedBorder)
                     #if os(iOS)
@@ -897,7 +888,7 @@ struct ProfileEditorView: View {
     @ViewBuilder
     private func field(_ label: String, text: Binding<String>, keyboard: KeyboardKind = .default, mono: Bool = false) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(label).font(.hosSubhead).foregroundStyle(.secondary)
+            FieldLabel(label)
             TextField("", text: text)
                 .textFieldStyle(.roundedBorder)
                 .font(mono ? .hosMono : .hosBody)

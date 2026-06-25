@@ -27,16 +27,12 @@ struct NewConsultationView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            HStack(spacing: 10) {
-                Image(systemName: "calendar.badge.plus")
-                    .font(.system(size: 22)).foregroundStyle(HOS.blue)
-                Text("Nova consulta").font(.hosTitle1)
-                Spacer()
+            SheetHeader("Nova consulta", systemImage: "calendar.badge.plus") {
                 Text(slug).font(.hosMono).foregroundStyle(.secondary)
             }
 
             VStack(alignment: .leading, spacing: 12) {
-                Text("DATA DA CONSULTA").font(.hosSubhead).foregroundStyle(.secondary)
+                FieldLabel("Data da consulta")
                 DatePicker("", selection: $date, displayedComponents: .date)
                     .datePickerStyle(.graphical)
                     .labelsHidden()

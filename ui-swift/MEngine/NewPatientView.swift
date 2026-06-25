@@ -41,7 +41,7 @@ struct NewPatientView: View {
                           keyboard: .emailAddress, autocap: .never)
 
                     VStack(alignment: .leading, spacing: 6) {
-                        Text("NOTAS").font(.hosSubhead).foregroundStyle(.secondary)
+                        FieldLabel("Notas")
                         TextEditor(text: $notes)
                             .font(.hosBody)
                             .frame(minHeight: 80)
@@ -75,12 +75,8 @@ struct NewPatientView: View {
     }
 
     private var header: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "person.crop.circle.badge.plus")
-                .font(.system(size: 22)).foregroundStyle(HOS.blue)
-            Text("Novo paciente").font(.hosTitle1)
-            Spacer()
-        }
+        SheetHeader("Novo paciente", subtitle: "Cadastro no arquivo clínico",
+                    systemImage: "person.crop.circle.badge.plus")
     }
 
     private var actions: some View {
@@ -107,7 +103,7 @@ struct NewPatientView: View {
                        keyboard: KeyboardKind = .default, mono: Bool = false,
                        autocap: Autocap = .sentences) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(label).font(.hosSubhead).foregroundStyle(.secondary)
+            FieldLabel(label)
             TextField(placeholder, text: text)
                 .textFieldStyle(.roundedBorder)
                 .font(mono ? .hosMono : .hosBody)
