@@ -18,12 +18,26 @@ final class ChatViewModel {
     var tokenUsage = ""
     let agents: [AgentDefinition] = AgentSeeds.all
 
+    /// Contexto opcional injetado no system prompt (ex.: dossiê real do paciente).
+    /// Quando presente, o agente conversa "sobre o dossiê" sem inventar dados.
+    var contextPrimer: String?
+
     private let transport: AgentTransport
     private var streamTask: Task<Void, Never>?
 
-    init(transport: AgentTransport, agent: AgentDefinition) {
+    init(transport: AgentTransport, agent: AgentDefinition, contextPrimer: String? = nil) {
         self.transport = transport
         self.selectedAgent = agent
+        self.contextPrimer = contextPrimer
+    }
+
+    /// Agente efetivo: o selecionado, com o `contextPrimer` (dossiê) anexado ao
+    /// system prompt quando houver.
+    private var effectiveAgent: AgentDefinition {
+        guard let primer = contextPrimer, !primer.isEmpty else { return selectedAgent }
+        var a = selectedAgent
+        a.systemPrompt += "\n\n--- Contexto do paciente (dossiê, somente leitura) ---\n" + primer
+        return a
     }
 
     var canSend: Bool { !isStreaming }
@@ -46,7 +60,7 @@ final class ChatViewModel {
         streamingText = ""; streamingThinking = ""; activeTools = []; errorText = nil
         isStreaming = true
         let history = messages
-        let agent = selectedAgent
+        let agent = effectiveAgent
         streamTask = Task { [weak self] in
             guard let self else { return }
             do {

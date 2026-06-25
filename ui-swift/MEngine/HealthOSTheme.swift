@@ -540,6 +540,34 @@ struct _GlassRowText: View {
     }
 }
 
+// MARK: - Avatar de paciente (iniciais sobre gradiente navy→blue)
+
+/// Avatar do mock healthdrive: iniciais do nome num disco com gradiente
+/// `navy → blue` (135°). Substitui a foto `avatar.png` quando ausente — é o
+/// líder das linhas de paciente na sidebar, no Início e nas listas iOS.
+struct PatientAvatar: View {
+    let name: String
+    var size: CGFloat = 28
+
+    private var initials: String {
+        let parts = name.split(separator: " ").prefix(2)
+        let chars = parts.compactMap { $0.first }
+        return String(chars).uppercased()
+    }
+
+    var body: some View {
+        Text(initials)
+            .font(.system(size: size * 0.38, weight: .semibold))
+            .foregroundStyle(.white)
+            .frame(width: size, height: size)
+            .background(
+                LinearGradient(colors: [HOS.navy, HOS.blue],
+                               startPoint: .topLeading, endPoint: .bottomTrailing),
+                in: Circle())
+            .accessibilityLabel(name)
+    }
+}
+
 // MARK: - Badge de ícone circular (avatar/glyph de linha)
 
 /// Glyph SF Symbol num disco tint suave — o acessório-líder das glass rows.

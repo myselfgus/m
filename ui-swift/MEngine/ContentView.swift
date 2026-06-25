@@ -147,6 +147,23 @@ struct ContentView: View {
 
     private var sidebar: some View {
         List(selection: $nav) {
+            // Linha de ferramentas do mock: Novo paciente · Nova sessão (transcrever).
+            Section {
+                HStack(spacing: 6) {
+                    Button { showNewPatient = true } label: {
+                        Label("Novo", systemImage: "person.badge.plus")
+                    }
+                    .buttonStyle(.borderedProminent).controlSize(.small).tint(HOS.blue)
+                    Button { nav = .nova } label: {
+                        Image(systemName: "waveform.badge.mic")
+                    }
+                    .buttonStyle(.bordered).controlSize(.small).tint(HOS.blue)
+                    .help("Nova sessão (transcrever)")
+                    Spacer()
+                }
+                .listRowInsets(EdgeInsets(top: 4, leading: 8, bottom: 4, trailing: 8))
+            }
+
             Section {
                 Label("Início", systemImage: "house.fill").tag(Nav.home)
                 Label("Nova sessão", systemImage: "waveform.badge.mic").tag(Nav.nova)
@@ -245,9 +262,7 @@ struct PatientRow: View {
     var deleting: Bool = false
     var body: some View {
         HStack(spacing: 10) {
-            Image(systemName: "person.crop.circle.fill")
-                .font(.system(size: 22))
-                .foregroundStyle(HOS.navy, HOS.blue.opacity(0.18))
+            PatientAvatar(name: patient.displayName, size: 28)
             VStack(alignment: .leading, spacing: 1) {
                 Text(patient.displayName).font(.hosHeadline).foregroundStyle(.primary).lineLimit(1)
                 Text(patient.consultationCount == 1 ? "1 consulta" : "\(patient.consultationCount) consultas")

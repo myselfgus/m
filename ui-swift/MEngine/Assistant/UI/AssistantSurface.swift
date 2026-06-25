@@ -4,18 +4,41 @@ import SwiftUI
 // Sem orb, sem morph, sem menubar: uma coluna lateral que recolhe (escondida) ↔ expande (chat).
 // Adaptada ao ChatViewModel (transporte B / Messages API direta). Skills: swiftui-patterns.
 
+/// Contexto opcional do paciente para a aba Chat do detalhe: nome (placeholder
+/// e cabeçalho) + dossiê real (injetado no system prompt via `contextPrimer`).
+struct PatientChatContext: Equatable {
+    let slug: String
+    let displayName: String
+    let dossier: String?
+}
+
 /// Entrada pública: a conversa completa do assistente, pronta para viver num `.inspector`
-/// (macOS) ou numa `.sheet` (iOS). Dona do seu próprio `ChatViewModel`.
+/// (macOS), numa `.sheet` (iOS), ou embutida na aba Chat de um paciente. Dona do
+/// seu próprio `ChatViewModel`.
 struct AssistantColumn: View {
-    @State private var vm = ChatViewModel(transport: MessagesAPITransport(), agent: AgentSeeds.clinico)
+    private let patient: PatientChatContext?
+    @State private var vm: ChatViewModel
+
+    init(patient: PatientChatContext? = nil) {
+        self.patient = patient
+        _vm = State(initialValue: ChatViewModel(
+            transport: MessagesAPITransport(),
+            agent: AgentSeeds.clinico,
+            contextPrimer: patient?.dossier))
+    }
+
+    private var composerPlaceholder: String {
+        patient.map { "Conversar sobre \($0.displayName)…" } ?? "Perguntar ao assistente…"
+    }
 
     var body: some View {
         VStack(spacing: 0) {
-            AssistantHeader(vm: vm)
+            AssistantHeader(vm: vm, patientName: patient?.displayName)
             Divider().opacity(0.28)
             if !KeychainCredentialStore().hasAPIKey { keyBanner }
-            MessageTimeline(vm: vm).frame(maxWidth: .infinity, maxHeight: .infinity)
-            ComposerView(vm: vm).padding(14)
+            MessageTimeline(vm: vm, patientName: patient?.displayName)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            ComposerView(vm: vm, placeholder: composerPlaceholder).padding(14)
         }
         .background(.bar)
     }
@@ -35,19 +58,22 @@ struct AssistantColumn: View {
 
 private struct AssistantHeader: View {
     @Bindable var vm: ChatViewModel
+    var patientName: String?
 
     var body: some View {
         VStack(spacing: 10) {
             HStack(spacing: 12) {
-                Image(systemName: "sparkle.magnifyingglass")
-                    .font(.title3.weight(.semibold)).foregroundStyle(HOS.blue)
+                Image(systemName: patientName == nil ? "sparkles" : "stethoscope")
+                    .font(.hosTitle2).foregroundStyle(HOS.blue)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Assistente").font(.headline)
-                    Text(vm.selectedAgent.model.displayName).font(.caption).foregroundStyle(.secondary)
+                    Text(patientName == nil ? "Assistente" : "Agente clínico").font(.hosHeadline)
+                    Text(patientName.map { "\($0) · somente leitura sobre o dossiê" }
+                         ?? vm.selectedAgent.model.displayName)
+                        .font(.hosCaption).foregroundStyle(.secondary).lineLimit(1)
                 }
                 Spacer()
                 if !vm.tokenUsage.isEmpty {
-                    Text(vm.tokenUsage).font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
+                    Text(vm.tokenUsage).font(.system(size: 10, design: .monospaced)).foregroundStyle(.secondary)
                 }
                 if !vm.messages.isEmpty {
                     Button { vm.resetConversation() } label: { Image(systemName: "plus.message") }
@@ -70,6 +96,7 @@ private struct AssistantHeader: View {
 
 private struct MessageTimeline: View {
     @Bindable var vm: ChatViewModel
+    var patientName: String?
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
@@ -93,7 +120,8 @@ private struct MessageTimeline: View {
     private var emptyState: some View {
         VStack(alignment: .leading, spacing: 6) {
             Image(systemName: "bubble.left.and.text.bubble.right").font(.system(size: 18)).foregroundStyle(.secondary)
-            Text("Pergunte ao assistente sobre o paciente ou o pipeline.")
+            Text(patientName.map { "Pergunte sobre \($0): evolução, dossiê, pipeline." }
+                 ?? "Pergunte ao assistente sobre o paciente ou o pipeline.")
                 .font(.hosFootnote).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }.frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -108,11 +136,11 @@ private struct MessageBubble: View {
         HStack {
             if message.role == .user { Spacer(minLength: 24) }
             MarkdownText(text: message.text)
-                .font(.body).textSelection(.enabled)
+                .font(.hosBody).textSelection(.enabled)
                 .padding(14).frame(maxWidth: 520, alignment: .leading)
                 .background {
-                    RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .fill(message.role == .user ? HOS.blue.opacity(0.14) : Color.primary.opacity(0.055))
+                    RoundedRectangle(cornerRadius: HOS.rXl, style: .continuous)
+                        .fill(message.role == .user ? HOS.blue.opacity(0.14) : HOS.tileFill())
                 }
             if message.role != .user { Spacer(minLength: 24) }
         }
@@ -126,14 +154,14 @@ private struct ToolCallCard: View {
             if call.state == .running { ProgressView().controlSize(.small) }
             else { Image(systemName: "checkmark.circle.fill").foregroundStyle(HOS.complete) }
             VStack(alignment: .leading, spacing: 2) {
-                Text(call.name).font(.caption.weight(.semibold))
+                Text(call.name).font(.hosHeadline)
                 Text(call.summary ?? (call.state == .running ? "executando" : "concluído"))
-                    .font(.caption2).foregroundStyle(.secondary)
+                    .font(.hosCaption).foregroundStyle(.secondary)
             }
             Spacer()
         }
         .padding(10)
-        .background { RoundedRectangle(cornerRadius: 12, style: .continuous).fill(HOS.info.opacity(0.10)) }
+        .background { RoundedRectangle(cornerRadius: HOS.rLg, style: .continuous).fill(HOS.info.opacity(0.10)) }
     }
 }
 
@@ -154,13 +182,14 @@ private struct ErrorRow: View {
 
 struct ComposerView: View {
     @Bindable var vm: ChatViewModel
+    var placeholder: String = "Mensagem"
     @FocusState private var focused: Bool
     var body: some View {
         HStack(alignment: .bottom, spacing: 10) {
-            TextField("Mensagem", text: $vm.composerText, axis: .vertical)
+            TextField(placeholder, text: $vm.composerText, axis: .vertical)
                 .textFieldStyle(.plain).lineLimit(1...5).focused($focused)
                 .padding(.horizontal, 13).padding(.vertical, 11)
-                .background { RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Color.primary.opacity(0.055)) }
+                .background { RoundedRectangle(cornerRadius: HOS.rXl, style: .continuous).fill(HOS.tileFill()) }
                 .onSubmit { vm.submitComposer() }
             Button {
                 vm.isStreaming ? vm.stopStreaming() : vm.submitComposer()

@@ -14,9 +14,43 @@ struct PatientDetailView: View {
 
     @State private var profile: PatientProfile?
     @State private var consultations: [Consultation] = []
+    @State private var dossier: PatientInfo?
     @State private var loading = false
     @State private var errorText: String?
     @State private var showProfileEditor = false
+    /// Aba ativa do detalhe (mock healthdrive: Chat · Arquivos · Pipeline; +Sessões no iOS).
+    @State private var tab: DetailTab = .pipeline
+    /// Documento selecionado na aba Arquivos (split macOS). nil = nenhum.
+    @State private var selectedDoc: DocRoute?
+
+    /// Abas do detalhe do paciente (segmented).
+    enum DetailTab: String, CaseIterable, Identifiable {
+        case chat, arquivos, pipeline
+        #if os(iOS)
+        case sessoes
+        #endif
+        var id: String { rawValue }
+        var label: String {
+            switch self {
+            case .chat: return "Chat"
+            case .arquivos: return "Arquivos"
+            case .pipeline: return "Pipeline"
+            #if os(iOS)
+            case .sessoes: return "Sessões"
+            #endif
+            }
+        }
+        var icon: String {
+            switch self {
+            case .chat: return "message"
+            case .arquivos: return "folder"
+            case .pipeline: return "arrow.triangle.branch"
+            #if os(iOS)
+            case .sessoes: return "calendar"
+            #endif
+            }
+        }
+    }
 
     // Criação de consulta / documento.
     @State private var showNewConsultation = false
@@ -66,8 +100,9 @@ struct PatientDetailView: View {
         NavigationStack {
             VStack(spacing: 0) {
                 header
+                segmentedTabs
                 Divider()
-                content
+                tabContent
             }
             .background(.background)
             .overlay { deletingOverlay }
@@ -187,126 +222,225 @@ struct PatientDetailView: View {
 
     // MARK: - Cabeçalho
 
-    private var header: some View {
-        HStack(alignment: .top, spacing: 14) {
-            IconBadge(systemImage: "person.fill", tint: HOS.blue, size: 52)
-            VStack(alignment: .leading, spacing: 6) {
-                Text(profile?.displayName ?? slug).font(.hosTitle1).foregroundStyle(.primary)
-                Text(slug).font(.hosMono).foregroundStyle(.secondary)
-                HStack(spacing: 6) {
-                    StatusPill(text: consultations.count == 1 ? "1 consulta" : "\(consultations.count) consultas",
-                               color: HOS.info, systemImage: "calendar")
-                    if let age = profile?.age {
-                        StatusPill(text: "\(age) anos", color: HOS.stAsl, systemImage: "number")
-                    }
-                    if let phone = profile?.phone, !phone.isEmpty {
-                        StatusPill(text: phone, color: HOS.stGem, systemImage: "phone.fill")
-                    }
-                }
-            }
-            Spacer()
-            VStack(spacing: 8) {
-                Button { showNewConsultation = true } label: {
-                    ActionLabel("Nova consulta", systemImage: "calendar.badge.plus")
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(HOS.blue)
-                Button { showProfileEditor = true } label: {
-                    ActionLabel("Editar perfil", systemImage: "person.text.rectangle")
-                }
-                .buttonStyle(.bordered)
-                .tint(HOS.blue)
-                .disabled(profile == nil)
-                Button { Task { await load() } } label: { Image(systemName: "arrow.clockwise") }
-                    .buttonStyle(.borderless)
-                    .help("Atualizar")
-            }
-        }
-        .padding(.horizontal, 24)
-        .padding(.top, 20)
-        .padding(.bottom, 14)
+    /// Legenda do paciente: idade (quando houver) + nº de consultas. Sexo não é
+    /// exposto pelo backend, então não é inventado.
+    private var subtitle: String {
+        var parts: [String] = []
+        if let age = profile?.age { parts.append("\(age) anos") }
+        parts.append(consultations.count == 1 ? "1 consulta" : "\(consultations.count) consultas")
+        return parts.joined(separator: " · ")
     }
 
-    // MARK: - Conteúdo
+    private var header: some View {
+        HStack(alignment: .center, spacing: 12) {
+            PatientAvatar(name: profile?.displayName ?? slug, size: 40)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(profile?.displayName ?? slug).font(.hosTitle1).foregroundStyle(.primary)
+                Text(subtitle).font(.hosCallout).foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 12)
+            Button { showNewConsultation = true } label: {
+                ActionLabel("Nova consulta", systemImage: "calendar.badge.plus")
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(HOS.blue)
+            Button { Task { await load() } } label: { Image(systemName: "arrow.clockwise") }
+                .buttonStyle(.borderless)
+                .help("Atualizar")
+        }
+        .padding(.horizontal, 18)
+        .padding(.top, 16)
+        .padding(.bottom, 12)
+    }
+
+    /// Controle segmentado de abas (Chat · Arquivos · Pipeline [· Sessões]).
+    private var segmentedTabs: some View {
+        Picker("", selection: $tab) {
+            ForEach(DetailTab.allCases) { t in
+                Label(t.label, systemImage: t.icon).tag(t)
+            }
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .padding(.horizontal, 18)
+        .padding(.bottom, 12)
+    }
+
+    // MARK: - Conteúdo por aba
 
     @ViewBuilder
-    private var content: some View {
-        if loading {
+    private var tabContent: some View {
+        if loading && consultations.isEmpty && profile == nil {
             Spacer(); ProgressView("Carregando…"); Spacer()
-        } else if let errorText {
+        } else if let errorText, consultations.isEmpty {
             Spacer()
             ContentUnavailableView("Erro", systemImage: "exclamationmark.triangle", description: Text(errorText))
             Spacer()
-        } else if consultations.isEmpty {
-            Spacer()
-            ContentUnavailableView {
-                Label("Sem consultas", systemImage: "calendar.badge.exclamationmark")
-            } description: {
-                Text("Nenhuma consulta registrada para este paciente.")
-            } actions: {
-                Button { showNewConsultation = true } label: {
-                    ActionLabel("Nova consulta", systemImage: "calendar.badge.plus")
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(HOS.blue)
-            }
-            Spacer()
         } else {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    ForEach(consultations) { consultation in
-                        consultationSection(consultation)
+            switch tab {
+            case .chat: chatTab
+            case .arquivos: filesTab
+            case .pipeline: pipelineTab
+            #if os(iOS)
+            case .sessoes: sessoesTab
+            #endif
+            }
+        }
+    }
+
+    // MARK: Aba Chat (assistente clínico primado com o dossiê real)
+
+    private var chatTab: some View {
+        AssistantColumn(patient: PatientChatContext(
+            slug: slug,
+            displayName: profile?.displayName ?? slug,
+            dossier: dossierPrimer))
+        .id(slug)   // recria a conversa ao trocar de paciente
+    }
+
+    /// String do dossiê real (info.json) injetada no agente. nil se nada disponível.
+    private var dossierPrimer: String? {
+        guard let d = dossier else { return nil }
+        var lines: [String] = []
+        if let s = d.summary, !s.isEmpty { lines.append("Resumo: \(s)") }
+        if !d.icdCodes.isEmpty { lines.append("CIDs: \(d.icdCodes.joined(separator: ", "))") }
+        if !d.medications.isEmpty { lines.append("Medicações: \(d.medications.joined(separator: ", "))") }
+        if !d.topics.isEmpty { lines.append("Tópicos: \(d.topics.joined(separator: ", "))") }
+        return lines.isEmpty ? nil : lines.joined(separator: "\n")
+    }
+
+    // MARK: Aba Arquivos (árvore de consultas → documentos + viewer)
+
+    @ViewBuilder
+    private var filesTab: some View {
+        if consultations.allSatisfy({ $0.documents.isEmpty }) {
+            emptyFiles
+        } else {
+            #if os(macOS)
+            HStack(spacing: 0) {
+                fileTree.frame(width: 260)
+                Divider()
+                fileViewer.frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            #else
+            ScrollView { fileTree.padding(.vertical, 8) }
+            #endif
+        }
+    }
+
+    private var fileTree: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 2) {
+                ForEach(consultations) { c in
+                    if !c.documents.isEmpty {
+                        Text(c.id + (c.date.map { " · \($0)" } ?? ""))
+                            .font(.hosSubhead).foregroundStyle(.secondary)
+                            .padding(.horizontal, 12).padding(.top, 10).padding(.bottom, 4)
+                        ForEach(c.documents, id: \.self) { name in
+                            fileTreeRow(consultation: c, name: name)
+                        }
                     }
                 }
-                .padding(24)
+            }
+            .padding(.horizontal, 8).padding(.vertical, 6)
+        }
+    }
+
+    @ViewBuilder
+    private func fileTreeRow(consultation c: Consultation, name: String) -> some View {
+        let route = DocRoute(consultationId: c.id, name: name)
+        #if os(macOS)
+        Button { selectedDoc = route } label: {
+            fileTreeLabel(name: name, selected: selectedDoc == route)
+        }
+        .buttonStyle(.plain)
+        .contextMenu { deleteDocButton(route) }
+        #else
+        NavigationLink(value: route) {
+            fileTreeLabel(name: name, selected: false)
+        }
+        .buttonStyle(.plain)
+        .swipeActions(edge: .trailing, allowsFullSwipe: false) { deleteDocButton(route) }
+        #endif
+    }
+
+    private func fileTreeLabel(name: String, selected: Bool) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: DocMeta.icon(for: name))
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(HOS.tint(forStage: name))
+                .frame(width: 16)
+            Text(name).font(.hosCallout).foregroundStyle(.primary)
+                .lineLimit(1).truncationMode(.middle)
+            Spacer(minLength: 4)
+        }
+        .padding(.horizontal, 8).padding(.vertical, 6)
+        .background(selected ? HOS.blue.opacity(0.12) : .clear,
+                    in: RoundedRectangle(cornerRadius: HOS.rSm, style: .continuous))
+        .contentShape(Rectangle())
+    }
+
+    @ViewBuilder
+    private func deleteDocButton(_ route: DocRoute) -> some View {
+        Button(role: .destructive) { documentToDelete = route } label: {
+            Label("Apagar documento", systemImage: "trash")
+        }
+    }
+
+    #if os(macOS)
+    @ViewBuilder
+    private var fileViewer: some View {
+        if let route = selectedDoc {
+            DocumentEditorView(slug: slug, consultationId: route.consultationId, name: route.name)
+                .id(route.id)
+        } else {
+            ContentUnavailableView("Selecione um documento", systemImage: "doc.text",
+                                   description: Text("Escolha um arquivo do dossiê à esquerda."))
+        }
+    }
+    #endif
+
+    private var emptyFiles: some View {
+        VStack { Spacer()
+            ContentUnavailableView {
+                Label("Sem arquivos", systemImage: "folder")
+            } description: {
+                Text("Nenhum documento gerado para este paciente ainda. Rode o pipeline numa consulta.")
+            }
+            Spacer()
+        }
+    }
+
+    // MARK: Aba Pipeline (session cards + stage chips + run controls)
+
+    @ViewBuilder
+    private var pipelineTab: some View {
+        if consultations.isEmpty {
+            emptyConsultations
+        } else {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    ForEach(consultations) { c in sessionCard(c) }
+                }
+                .padding(20)
                 .frame(maxWidth: 820, alignment: .leading)
                 .frame(maxWidth: .infinity)
             }
         }
     }
 
-    @ViewBuilder
-    private func consultationSection(_ consultation: Consultation) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
-                StatusPill(text: consultation.id, color: HOS.navy, systemImage: "calendar")
-                if let date = consultation.date, !date.isEmpty {
-                    Text(date).font(.hosSubhead).foregroundStyle(.secondary)
+    private func sessionCard(_ consultation: Consultation) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Consulta \(consultation.id)").font(.hosTitle3)
+                    Text((consultation.date ?? "—") + " · pt-BR")
+                        .font(.hosMono).foregroundStyle(.secondary)
                 }
                 Spacer()
-                if let source = consultation.source, !source.isEmpty {
-                    StatusPill(text: source, color: HOS.stStt, systemImage: "waveform")
-                }
+                sessionStatusPill(consultation)
             }
-            if consultation.documents.isEmpty {
-                Text("Sem documentos nesta consulta.").font(.hosFootnote).foregroundStyle(.secondary)
-            } else {
-                VStack(spacing: 8) {
-                    ForEach(consultation.documents, id: \.self) { name in
-                        NavigationLink(value: DocRoute(consultationId: consultation.id, name: name)) {
-                            documentRow(name)
-                        }
-                        .buttonStyle(.plain)
-                        .contextMenu {
-                            Button(role: .destructive) {
-                                documentToDelete = DocRoute(consultationId: consultation.id, name: name)
-                            } label: {
-                                Label("Apagar documento", systemImage: "trash")
-                            }
-                        }
-                        #if os(iOS)
-                        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                            Button(role: .destructive) {
-                                documentToDelete = DocRoute(consultationId: consultation.id, name: name)
-                            } label: {
-                                Label("Apagar", systemImage: "trash")
-                            }
-                        }
-                        #endif
-                    }
-                }
-            }
-
+            StageChipRow(documents: consultation.documents)
             Divider().padding(.vertical, 2)
             consultationActions(consultation)
             PipelineControl(slug: slug, consultation: consultation) {
@@ -316,6 +450,63 @@ struct PatientDetailView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .healthCard()
     }
+
+    /// Estado da consulta derivado dos documentos: gem_complete / needs_review / sem análise.
+    @ViewBuilder
+    private func sessionStatusPill(_ c: Consultation) -> some View {
+        let kinds = HomeView.docKinds(c.documents)
+        if kinds.contains("GEM") {
+            StatusPill(text: "gem_complete", color: HOS.complete, systemImage: "checkmark.seal.fill")
+        } else if !kinds.isEmpty {
+            StatusPill(text: "needs_review", color: HOS.review, systemImage: "exclamationmark.triangle.fill")
+        } else {
+            StatusPill(text: "sem análise", color: HOS.pending)
+        }
+    }
+
+    private var emptyConsultations: some View {
+        VStack { Spacer()
+            ContentUnavailableView {
+                Label("Sem consultas", systemImage: "calendar.badge.exclamationmark")
+            } description: {
+                Text("Nenhuma consulta registrada para este paciente.")
+            } actions: {
+                Button { showNewConsultation = true } label: {
+                    ActionLabel("Nova consulta", systemImage: "calendar.badge.plus")
+                }
+                .buttonStyle(.borderedProminent).tint(HOS.blue)
+            }
+            Spacer()
+        }
+    }
+
+    #if os(iOS)
+    // MARK: Aba Sessões (histórico de consultas — sem player; backend não faz streaming)
+
+    @ViewBuilder
+    private var sessoesTab: some View {
+        if consultations.isEmpty {
+            emptyConsultations
+        } else {
+            ScrollView {
+                VStack(spacing: HOS.s2) {
+                    ForEach(consultations) { c in
+                        GlassRow(title: "Consulta \(c.id)", subtitle: c.date) {
+                            Text(c.id)
+                                .font(.system(size: 13, weight: .bold))
+                                .foregroundStyle(HOS.blue)
+                                .frame(width: 34, height: 34)
+                                .background(HOS.blue.opacity(0.12), in: Circle())
+                        } trailing: {
+                            sessionStatusPill(c)
+                        }
+                    }
+                }
+                .padding(16)
+            }
+        }
+    }
+    #endif
 
     /// Ações por consulta: novo documento, importar arquivo e menu (•••) com
     /// "Apagar consulta".
@@ -356,49 +547,6 @@ struct PatientDetailView: View {
         }
     }
 
-    private func documentRow(_ name: String) -> some View {
-        GlassRow(title: title(for: name)) {
-            IconBadge(systemImage: icon(for: name), tint: HOS.tint(forStage: name))
-        } subtitle: {
-            Text(name).font(.hosCaption).foregroundStyle(.secondary)
-                .lineLimit(1).truncationMode(.middle)
-        } trailing: {
-            HStack(spacing: 8) {
-                StatusPill(text: kind(for: name), color: HOS.tint(forStage: name))
-                Image(systemName: "chevron.right").foregroundStyle(.tertiary).font(.caption)
-            }
-        }
-    }
-
-    // MARK: - Helpers
-
-    private func icon(for name: String) -> String {
-        let k = name.lowercased()
-        if k.contains("birp") { return "bolt.heart.fill" }
-        if k.contains("soap_long") { return "chart.line.uptrend.xyaxis" }
-        if k.contains("soap") { return "doc.text.fill" }
-        if k.contains("transcri") { return "waveform" }
-        return "doc"
-    }
-
-    private func title(for name: String) -> String {
-        let k = name.lowercased()
-        if k.contains("birp") { return "Nota BIRP" }
-        if k.contains("soap_long") { return "SOAP — Seguimento" }
-        if k.contains("soap") { return "SOAP — Sumário" }
-        if k.contains("transcri") { return "Transcrição" }
-        return name
-    }
-
-    private func kind(for name: String) -> String {
-        let k = name.lowercased()
-        if k.contains("birp") { return "BIRP" }
-        if k.contains("soap_long") { return "Seguimento" }
-        if k.contains("soap") { return "Sumário" }
-        if k.contains("transcri") { return "STT" }
-        return "doc"
-    }
-
     private func load() async {
         loading = true
         errorText = nil
@@ -407,8 +555,10 @@ struct PatientDetailView: View {
             let client = try settings.makeClient()
             async let cons = client.fetchConsultations(slug: slug)
             async let prof = try? client.fetchProfile(slug: slug)
+            async let info = try? client.patientInfo(patientId: slug)
             consultations = try await cons
             profile = await prof
+            dossier = await info
         } catch {
             errorText = error.localizedDescription
         }
@@ -466,6 +616,86 @@ struct PatientDetailView: View {
             await load()
         } catch {
             errorText = error.localizedDescription
+        }
+    }
+}
+
+// MARK: - Metadados de documento (ícone / título / rótulo curto por nome de arquivo)
+
+/// Deriva apresentação de um documento clínico a partir do nome do arquivo.
+enum DocMeta {
+    static func icon(for name: String) -> String {
+        let k = name.lowercased()
+        if k.contains("birp") { return "bolt.heart.fill" }
+        if k.contains("gem") { return "point.3.connected.trianglepath.dotted" }
+        if k.contains("vdlp") || k.contains("dimensional") { return "chart.dots.scatter" }
+        if k.contains("asl") { return "brain.head.profile" }
+        if k.contains("soap_long") { return "chart.line.uptrend.xyaxis" }
+        if k.contains("soap") { return "doc.text.fill" }
+        if k.contains("transcri") { return "waveform" }
+        if k.contains(".json") { return "curlybraces" }
+        return "doc"
+    }
+
+    static func title(for name: String) -> String {
+        let k = name.lowercased()
+        if k.contains("birp") { return "Nota BIRP" }
+        if k.contains("gem") { return "GEM — grafo" }
+        if k.contains("vdlp") || k.contains("dimensional") { return "VDLP — dimensional" }
+        if k.contains("asl") { return "ASL — linguística" }
+        if k.contains("soap_long") { return "SOAP — Seguimento" }
+        if k.contains("soap") { return "SOAP — Sumário" }
+        if k.contains("transcri") { return "Transcrição" }
+        return name
+    }
+
+    static func kind(for name: String) -> String {
+        let k = name.lowercased()
+        if k.contains("birp") { return "BIRP" }
+        if k.contains("gem") { return "GEM" }
+        if k.contains("vdlp") || k.contains("dimensional") { return "VDLP" }
+        if k.contains("asl") { return "ASL" }
+        if k.contains("soap_long") { return "Seguimento" }
+        if k.contains("soap") { return "Sumário" }
+        if k.contains("transcri") { return "STT" }
+        return "doc"
+    }
+}
+
+// MARK: - Linha de stage chips (presença derivada dos documentos)
+
+/// Tira de pílulas de estágio (STT · ASL · VDLP · GEM · BIRP) — cada uma "done"
+/// (tint cheio + ✓) quando o artefato existe nos documentos, ou apagada quando
+/// ausente. Presença é derivada dos nomes de arquivos reais — nunca inventada.
+struct StageChipRow: View {
+    let documents: [String]
+
+    private static let stages: [(key: String, label: String)] = [
+        ("transcri", "STT"), ("asl", "ASL"), ("vdlp", "VDLP"), ("gem", "GEM"), ("birp", "BIRP"),
+    ]
+
+    private func present(_ key: String) -> Bool {
+        let blob = documents.joined(separator: " ").lowercased()
+        if key == "vdlp" { return blob.contains("vdlp") || blob.contains("dimensional") }
+        return blob.contains(key)
+    }
+
+    var body: some View {
+        HStack(spacing: 6) {
+            ForEach(Self.stages, id: \.key) { stage in
+                let on = present(stage.key)
+                let tint = HOS.tint(forStage: stage.key == "transcri" ? "stt" : stage.key)
+                HStack(spacing: 4) {
+                    Text(stage.label).font(.system(size: 11, weight: .bold))
+                    Image(systemName: on ? "checkmark" : "minus")
+                        .font(.system(size: 9, weight: .bold))
+                }
+                .foregroundStyle(on ? tint : Color.secondary.opacity(0.55))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 8)
+                .background(on ? tint.opacity(0.13) : HOS.tileFill(),
+                            in: RoundedRectangle(cornerRadius: HOS.rMd, style: .continuous))
+            }
         }
     }
 }
