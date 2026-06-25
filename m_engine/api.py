@@ -29,13 +29,14 @@ from pathlib import Path
 from typing import Optional
 
 from celery.result import AsyncResult
-from fastapi import Body, FastAPI, File, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import Body, FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
 
 from m_engine.config import get_settings
 from m_engine import store
-from m_engine.assistant import get_assistant, load_transcript
+# Assistente conversacional movido para o cliente (mapp): Messages API direta.
+# Não há mais backend de chat (WebSocket) — removido em jun/2026.
 from m_engine.store import load_info, pat_dir
 from m_engine.tasks import STAGE_TASKS, celery_app
 from m_engine.util import today
@@ -593,66 +594,6 @@ def delete_consult_document(slug: str, cid: str, name: str, body: Optional[dict]
     dest = _trash_dest(f"{slug}__{Path(cid).name}__{path.name}", stamp=stamp)
     path.rename(dest)
     return {"ok": True}
-
-
-# ---------------------------------------------------------------------------
-# Assistente agêntico GERAL e PERSISTENTE (Claude Sonnet 4.6) sobre WebSocket
-# ---------------------------------------------------------------------------
-@app.get("/assistant/history")
-def assistant_history() -> dict:
-    """Histórico persistido da conversa geral (replay alternativo ao WS)."""
-    return {"messages": load_transcript()}
-
-
-@app.websocket("/assistant/ws")
-async def assistant_ws(websocket: WebSocket) -> None:
-    """
-    Ponte WebSocket ↔ conversa geral persistente (Claude Sonnet 4.6 via API).
-
-    Cliente → servidor: {"type":"user","text":"..."}
-    Servidor → cliente: {"type":"history",...} | {"type":"ready"}
-                        | {"type":"assistant","text":...} | {"type":"tool",...}
-                        | {"type":"result"} | {"type":"error","message":...}
-    """
-    await websocket.accept()
-    assistant = get_assistant()
-    queue = assistant.subscribe()
-
-    async def pump() -> None:
-        while True:
-            frame = await queue.get()
-            await websocket.send_json(frame)
-
-    pump_task: Optional[asyncio.Task] = None
-    try:
-        # Replay do histórico persistido, depois "ready".
-        for frame in assistant.history_frames():
-            await websocket.send_json(frame)
-        await websocket.send_json({"type": "ready"})
-
-        pump_task = asyncio.create_task(pump())
-
-        while True:
-            data = await websocket.receive_text()
-            try:
-                msg = json.loads(data)
-            except json.JSONDecodeError:
-                await websocket.send_json({"type": "error", "message": "JSON inválido."})
-                continue
-            if msg.get("type") == "user":
-                # Agenda o turno; ele roda independente deste socket (sobrevive ao background).
-                await assistant.handle_user(msg.get("text") or "")
-    except WebSocketDisconnect:
-        pass
-    except Exception as exc:  # noqa: BLE001
-        try:
-            await websocket.send_json({"type": "error", "message": str(exc)[:500]})
-        except Exception:
-            pass
-    finally:
-        if pump_task:
-            pump_task.cancel()
-        assistant.unsubscribe(queue)
 
 
 @app.get("/healthz")
