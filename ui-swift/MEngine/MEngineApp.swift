@@ -12,5 +12,10 @@ struct MEngineApp: App {
         #if os(macOS)
         .defaultSize(width: 1100, height: 720)
         #endif
+
+        #if os(macOS)
+        // Presença do assistente na barra de menus (mesmo painel conversacional).
+        MenuBarAssistantScene(settings: settings)
+        #endif
     }
 }

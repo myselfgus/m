@@ -24,13 +24,6 @@ struct ContentView: View {
     @State private var deletingSlug: String?
     /// Erro de exclusão a exibir (alerta).
     @State private var deleteError: String?
-    // macOS: assistente abre por padrão como inspector lateral.
-    // iOS: começa fechado e é aberto sob demanda (FAB + sheet) — ver body.
-    #if os(macOS)
-    @AppStorage("m_show_assistant") private var showAssistant = true
-    #else
-    @AppStorage("m_show_assistant_ios") private var showAssistant = false
-    #endif
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
 
     /// Slug do paciente selecionado (ou nil em Início/Nova sessão).
@@ -54,33 +47,17 @@ struct ContentView: View {
         } detail: {
             detail
         }
-        #if os(macOS)
-        .inspector(isPresented: $showAssistant) {
-            AssistantChatView()
-                .inspectorColumnWidth(min: 300, ideal: 340, max: 460)
+        // Assistente: orb flutuante que morfa em painel (substitui o chat lateral),
+        // sobre todo o dashboard, nas duas plataformas.
+        .overlay(alignment: .bottomTrailing) {
+            AssistantOrb(contextSlug: currentSlug)
         }
-        #endif
         .toolbar {
             ToolbarItem {
                 Button { showNewPatient = true } label: { Image(systemName: "person.badge.plus") }
                     .help("Novo paciente")
             }
-            #if os(macOS)
-            ToolbarItem {
-                Button { showAssistant.toggle() } label: { Image(systemName: "sparkles") }
-                    .help(showAssistant ? "Ocultar assistente" : "Mostrar assistente")
-            }
-            #endif
         }
-        // iOS: botão flutuante sempre acessível para abrir o assistente, já que o
-        // inspector lateral não cabe no iPhone. Apresentado como sheet.
-        #if os(iOS)
-        .overlay(alignment: .bottomTrailing) { assistantFAB }
-        .sheet(isPresented: $showAssistant) {
-            AssistantChatView(onClose: { showAssistant = false })
-                .presentationDragIndicator(.visible)
-        }
-        #endif
         .task { await loadPatients() }
         .sheet(isPresented: $showSettings) { SettingsView() }
         .sheet(isPresented: $showNewPatient) {
@@ -151,24 +128,6 @@ struct ContentView: View {
             deleteError = error.localizedDescription
         }
     }
-
-    #if os(iOS)
-    /// Botão flutuante (FAB) que abre o assistente de qualquer tela no iPhone/iPad.
-    private var assistantFAB: some View {
-        Button { showAssistant = true } label: {
-            Image(systemName: "sparkles")
-                .font(.system(size: 20, weight: .semibold))
-                .foregroundStyle(.white)
-                .frame(width: 56, height: 56)
-                .background(HOS.blue, in: Circle())
-                .shadow(color: .black.opacity(0.25), radius: 8, x: 0, y: 4)
-        }
-        .buttonStyle(.plain)
-        .padding(.trailing, 20)
-        .padding(.bottom, 20)
-        .accessibilityLabel("Abrir assistente")
-    }
-    #endif
 
     // MARK: - Sidebar
 
