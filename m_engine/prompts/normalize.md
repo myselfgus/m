@@ -26,7 +26,7 @@ EXTRACTION PRINCIPLES:
 METADATA TO EXTRACT:
 - patient_name: Full name if mentioned in transcription OR in filename, or "Paciente" if not stated
 - patient_initials: Patient initials (e.g., "JS" for João Silva), null if not mentioned
-- professional_name: Therapist/doctor name (use config if available)
+- professional_name: Therapist/doctor name. If an <active_professional> profile is provided in the user message, PREFER it as the professional identity (it is the configured clinician of record); otherwise extract from the transcription.
 - tags: Array of general searchable tags (e.g., ["psicoterapia", "primeira_consulta", "ansiedade"])
 - confidence: How confident you are in the extraction (high/medium/low)
 - needs_correction: Boolean - does transcription have errors to fix?
@@ -79,6 +79,8 @@ WHAT TO PRESERVE:
 - Emotional and communicative context indicators
 
 CRITICAL: Paralinguistic markers are clinically valuable. They provide context about patient affect, hesitation, emotional state, and communication patterns. NEVER remove them.
+
+PROFESSIONAL GROUNDING: If an <active_professional> profile is provided in the user message, use it to correctly attribute the clinician's turns. Never invent or rephrase the professional's words to match the profile — only use it as context for who the clinician is. Do not hallucinate statements not present in the transcription.
 
 OUTPUT FORMAT: JSON with corrections analysis and corrected text.
 <!-- END: correction -->

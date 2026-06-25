@@ -72,6 +72,69 @@ def pat_dir() -> Path:
 
 
 # ---------------------------------------------------------------------------
+# Perfil do profissional ativo (M_BASE/professional.json) — fonte de verdade
+# para assinatura, identificação e grounding da normalização.
+# ---------------------------------------------------------------------------
+
+
+def professional_path() -> Path:
+    return get_settings().m_base / "professional.json"
+
+
+def load_professional() -> dict:
+    """
+    Lê M_BASE/professional.json (perfil ÚNICO do clínico ativo). Tolerante:
+    arquivo ausente ou corrompido → {}. Nunca levanta exceção.
+    Campos: name, credential (CRM/RQE), specialty, clinic, signature, notes.
+    """
+    try:
+        p = professional_path()
+        if p.is_file():
+            return json.loads(p.read_text(encoding="utf-8")) or {}
+    except (json.JSONDecodeError, OSError, ValueError):
+        pass
+    return {}
+
+
+def save_professional(professional: dict) -> None:
+    """Persiste o perfil do profissional ativo (M_BASE/professional.json)."""
+    p = professional_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(professional or {}, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def professional_signature_block() -> str:
+    """
+    Bloco de assinatura em Markdown a partir do perfil ativo. Omite linhas vazias.
+    Retorna "" quando não há perfil. `credential` aceita o alias legado `registration`.
+    """
+    prof = load_professional()
+    if not prof:
+        return ""
+    name = (prof.get("name") or "").strip()
+    credential = (prof.get("credential") or prof.get("registration") or "").strip()
+    specialty = (prof.get("specialty") or "").strip()
+    clinic = (prof.get("clinic") or "").strip()
+    signature = (prof.get("signature") or "").strip()
+
+    lines: list[str] = []
+    if name:
+        lines.append(f"**{name}**")
+    cred_spec = " · ".join(x for x in (credential, specialty) if x)
+    if cred_spec:
+        lines.append(cred_spec)
+    if clinic:
+        lines.append(clinic)
+    if signature:
+        lines.append(signature)
+    if not lines:
+        return ""
+    # Markdown hard line breaks (two trailing spaces) entre as linhas do bloco.
+    body = "  \n".join(lines)
+    return f"\n\n---\n\n{body}"
+
+
+# ---------------------------------------------------------------------------
 # Identidade do paciente (slug + profile.json)
 # ---------------------------------------------------------------------------
 

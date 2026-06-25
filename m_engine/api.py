@@ -14,6 +14,9 @@ Endpoints:
   GET  /patients/{slug}/consultations                  consultas + documentos (.md) por consulta
   GET  /patients/{slug}/consultations/{cid}/documents/{name}   conteúdo Markdown de um documento
   PUT  /patients/{slug}/consultations/{cid}/documents/{name}   sobrescreve um documento Markdown
+  DELETE /patients/{slug}                              soft-delete do dossiê (move p/ _trash)
+  DELETE /patients/{slug}/consultations/{cid}          soft-delete da consulta (+ remove do index)
+  DELETE /patients/{slug}/consultations/{cid}/documents/{name}  soft-delete de um documento .md
   GET  /patients/{slug}/info                           visão mesclada (profile + index) [compat]
   GET  /healthz                                        liveness simples
 """
@@ -123,8 +126,10 @@ class ProfessionalUpdate(BaseModel):
 
     name: Optional[str] = None
     specialty: Optional[str] = None
-    registration: Optional[str] = None  # CRM/RQE
+    credential: Optional[str] = None  # CRM/RQE
+    registration: Optional[str] = None  # alias legado de credential
     clinic: Optional[str] = None
+    signature: Optional[str] = None  # linha livre de assinatura (opcional)
     notes: Optional[str] = None
 
 
@@ -338,7 +343,7 @@ def get_consult_document(slug: str, cid: str, name: str) -> str:
 
 
 @app.put("/patients/{slug}/consultations/{cid}/documents/{name}", response_model=DocumentWriteResult)
-def put_consult_document(slug: str, cid: str, name: str, content: str = Body(..., media_type="text/plain")) -> DocumentWriteResult:
+def put_consult_document(slug: str, cid: str, name: str, content: str = Body(..., embed=True)) -> DocumentWriteResult:
     """Sobrescreve um documento Markdown de uma consulta; só grava em C{n}/*.md."""
     path = _consult_doc_path(slug, cid, name)
     if not path.parent.is_dir():
@@ -493,38 +498,101 @@ def list_stages() -> dict:
 
 # ---------------------------------------------------------------------------
 # Perfil do profissional (professional.json) — global ao app
+# Fonte de verdade para assinatura, identificação e grounding da normalização.
 # ---------------------------------------------------------------------------
-def _professional_file() -> Path:
-    return get_settings().m_base / "professional.json"
-
-
 @app.get("/professional")
 def get_professional() -> dict:
     """Retorna o perfil do profissional (Dr. Gustavo). Vazio se ainda não definido."""
-    p = _professional_file()
-    if not p.is_file():
-        return {}
-    try:
-        return json.loads(p.read_text("utf-8"))
-    except Exception:  # noqa: BLE001
-        return {}
+    return store.load_professional()
 
 
 @app.put("/professional")
 def put_professional(update: ProfessionalUpdate) -> dict:
     """Salva/atualiza o perfil do profissional (merge dos campos não-nulos)."""
-    p = _professional_file()
-    current: dict = {}
-    if p.is_file():
-        try:
-            current = json.loads(p.read_text("utf-8"))
-        except Exception:  # noqa: BLE001
-            current = {}
+    current = store.load_professional()
     for k, v in update.model_dump(exclude_none=True).items():
         current[k] = v
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(current, ensure_ascii=False, indent=2), "utf-8")
+    store.save_professional(current)
     return current
+
+
+# ---------------------------------------------------------------------------
+# Soft-delete (DESTRUCTIVE-SAFE): nada é apagado de verdade — tudo vai para o
+# lixo em M_BASE/_trash/. Todos os caminhos confinados sob M_BASE.
+# ---------------------------------------------------------------------------
+def _trash_dir() -> Path:
+    d = get_settings().m_base / "_trash"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _trash_dest(name: str, *, stamp: Optional[str] = None) -> Path:
+    """
+    Caminho destino em _trash/ a partir de um `name` base. Se `stamp` vier no body,
+    usa-o; senão (e em caso de colisão) usa um sufixo incremental -2, -3… Como não
+    há relógio confiável, o sufixo garante unicidade sem sobrescrever lixo anterior.
+    """
+    trash = _trash_dir()
+    safe = Path(name).name  # defensivo contra traversal
+    base = f"{safe}__{stamp}" if stamp else safe
+    dest = trash / base
+    if not dest.exists():
+        return dest
+    n = 2
+    while (trash / f"{base}-{n}").exists():
+        n += 1
+    return trash / f"{base}-{n}"
+
+
+@app.delete("/patients/{slug}")
+def delete_patient(slug: str, body: Optional[dict] = Body(default=None)) -> dict:
+    """Move pat/<slug> → _trash/<slug>__<stamp> (soft-delete, nunca rm)."""
+    root = _patient_root(slug)  # valida slug + confina sob pat_dir()
+    if not root.is_dir():
+        raise HTTPException(404, f"Paciente não encontrado: {slug}")
+    stamp = (body or {}).get("stamp")
+    dest = _trash_dest(slug, stamp=stamp)
+    root.rename(dest)
+    return {"ok": True, "trashed": str(dest)}
+
+
+@app.delete("/patients/{slug}/consultations/{cid}")
+def delete_consultation(slug: str, cid: str, body: Optional[dict] = Body(default=None)) -> dict:
+    """
+    Move pat/<slug>/<cid> → _trash/<slug>__<cid>__<suffix> e remove a entrada da
+    consulta do index.json. Soft-delete confinado sob M_BASE.
+    """
+    root = _patient_root(slug)
+    safe_cid = Path(cid).name
+    if not safe_cid or safe_cid != cid:
+        raise HTTPException(400, "Id de consulta inválido.")
+    cdir = root / safe_cid
+    stamp = (body or {}).get("stamp")
+    moved = None
+    if cdir.is_dir():
+        dest = _trash_dest(f"{slug}__{safe_cid}", stamp=stamp)
+        cdir.rename(dest)
+        moved = str(dest)
+    # Remove a entrada do index.json (mesmo que a pasta não exista mais).
+    idx = store.load_index(slug)
+    cons = idx.get("consultations", [])
+    idx["consultations"] = [c for c in cons if c.get("id") != safe_cid]
+    store.save_index(slug, idx)
+    if moved is None and len(idx["consultations"]) == len(cons):
+        raise HTTPException(404, f"Consulta não encontrada: {safe_cid}")
+    return {"ok": True}
+
+
+@app.delete("/patients/{slug}/consultations/{cid}/documents/{name}")
+def delete_consult_document(slug: str, cid: str, name: str, body: Optional[dict] = Body(default=None)) -> dict:
+    """Move pat/<slug>/<cid>/<name>.md → _trash (soft-delete; só .md, confinado)."""
+    path = _consult_doc_path(slug, cid, name)  # valida slug/cid/.md + confina
+    if not path.is_file():
+        raise HTTPException(404, f"Documento não encontrado: {Path(name).name}")
+    stamp = (body or {}).get("stamp")
+    dest = _trash_dest(f"{slug}__{Path(cid).name}__{path.name}", stamp=stamp)
+    path.rename(dest)
+    return {"ok": True}
 
 
 # ---------------------------------------------------------------------------

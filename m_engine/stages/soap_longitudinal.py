@@ -42,6 +42,7 @@ from m_engine.store import (
     gem_path,
     load_info,
     longitudinal_dir,
+    professional_signature_block,
     read_json,
     transcription_path,
 )
@@ -334,8 +335,8 @@ def run(patient_id: str, dates: list[str], *, model: str | None = None, force: b
         temperature=0.4,
     ).content
 
-    # Monta e grava o documento final
-    document = _assemble_document(soa, plan, sessions, info)
+    # Monta e grava o documento final (+ assinatura do profissional ativo).
+    document = _assemble_document(soa, plan, sessions, info) + professional_signature_block()
     ts = now_iso().replace(":", "-").replace(".", "-")[:19]
     out = _output_path(patient_id, sessions, ts)
     out.parent.mkdir(parents=True, exist_ok=True)

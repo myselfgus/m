@@ -40,6 +40,7 @@ from m_engine.store import (
     find_existing_patient,
     generate_patient_id,
     load_info,
+    load_professional,
     read_json,
     save_info,
     transcription_path,
@@ -77,16 +78,52 @@ def prewarm_blocks() -> list[list[SystemBlock]]:
 
 
 # ---------------------------------------------------------------------------
+# Perfil do profissional ativo (professional.json) — grounding da normalização
+# ---------------------------------------------------------------------------
+
+
+def _professional_profile_line() -> str:
+    """
+    Linha curta com o perfil do profissional ATIVO (professional.json), injetada
+    nos user-prompts de metadata e correção para que o modelo atribua corretamente
+    a fala do clínico e não alucine as palavras do médico. "" se não houver perfil.
+    """
+    prof = load_professional()
+    if not prof:
+        return ""
+    name = (prof.get("name") or "").strip()
+    specialty = (prof.get("specialty") or "").strip()
+    credential = (prof.get("credential") or prof.get("registration") or "").strip()
+    clinic = (prof.get("clinic") or "").strip()
+    parts = []
+    if name:
+        parts.append(f"Nome={name}")
+    if specialty:
+        parts.append(f"Especialidade={specialty}")
+    if credential:
+        parts.append(f"Registro={credential}")
+    if clinic:
+        parts.append(f"Clínica={clinic}")
+    if not parts:
+        return ""
+    return "Perfil do profissional ativo: " + ", ".join(parts) + "."
+
+
+# ---------------------------------------------------------------------------
 # Etapa: extração de metadados (extractMetadata)
 # ---------------------------------------------------------------------------
 
 
 def _extract_metadata(text: str, filename: str, *, model: str | None) -> ExtractedMetadata:
     system = _prompt_block("metadata")
+    # Perfil do profissional ativo (config real): orienta professional_name.
+    prof_line = _professional_profile_line()
+    prof_block = f"\n<active_professional>\n{prof_line}\n</active_professional>\n" if prof_line else ""
     # User prompt montado em código (fiel ao legado), com os exemplos few-shot.
     user = f"""<source_filename>
 {filename}
 </source_filename>
+{prof_block}
 
 <clinical_transcription>
 {text}
@@ -162,10 +199,13 @@ def _build_correction_user(text: str, correction_notes: str | None, chunk_info: 
     )
     # Indicação de chunk, quando aplicável (espelha "This is chunk i of n" do legado).
     chunk_line = f"\nThis is {chunk_info} from a larger transcription." if chunk_info else ""
+    # Perfil do profissional ativo: ancora a fala do clínico (evita alucinação).
+    prof_line = _professional_profile_line()
+    prof_block = f"\n<active_professional>\n{prof_line}\n</active_professional>\n" if prof_line else ""
 
     return f"""<transcription>
 {text}
-</transcription>{correction_context}
+</transcription>{correction_context}{prof_block}
 
 TASK: Analyze if corrections are needed and apply them if necessary.{chunk_line}
 

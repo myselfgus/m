@@ -51,6 +51,8 @@ from m_engine.store import (
     extract_initials,
     find_existing_patient,
     generate_patient_id,
+    load_professional,
+    professional_signature_block,
     read_json,
     register_session,
     write_json,
@@ -256,8 +258,9 @@ def run(transcription_json_path: str | Path, *, model: str | None = None, force:
             return existing
 
     # --- GRAVAÇÃO: Markdown (caminho fixo C{n}/BIRP.md) + JSON estrutural ---
+    # Assinatura do profissional ativo (professional.json) ao fim do documento.
     md_path = birp_doc_path(patient_id, date)
-    md_path.write_text(_assemble_markdown(note, date=date), encoding="utf-8")
+    md_path.write_text(_assemble_markdown(note, date=date) + professional_signature_block(), encoding="utf-8")
 
     structural = {
         "patient_id": patient_id,
@@ -287,11 +290,14 @@ def run(transcription_json_path: str | Path, *, model: str | None = None, force:
         "topicos_principais": note.topicos_principais,
         "clinical_context": note.clinical_context.model_dump(),
     }
+    # Profissional do dossiê = perfil ATIVO (professional.json), fonte de verdade.
+    # Fallback ao nome detectado pelo LLM apenas se o perfil ainda não foi configurado.
+    active_professional = load_professional() or {"name": note.professional_name}
     register_session(
         patient_id,
         patient_name=patient_name,
         patient_initials=patient_initials,
-        professional={"name": note.professional_name},
+        professional=active_professional,
         session_entry={
             "date": date,
             "source_file": src_path.name,

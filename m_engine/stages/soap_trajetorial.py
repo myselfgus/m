@@ -34,6 +34,7 @@ from m_engine.store import (
     ensure_dossier,
     gem_path,
     load_info,
+    professional_signature_block,
     read_json,
     soap_trajetorial_path,
     transcription_path,
@@ -315,6 +316,8 @@ def run(patient_id: str, date: str, *, model: str | None = None, force: bool = F
     document = _assemble_document(
         clinical_analysis, therapeutic_plan, patient_info, professional_info, session_date
     )
+    # Assinatura do profissional ativo (professional.json) ao fim do documento.
+    document += professional_signature_block()
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(document, encoding="utf-8")
