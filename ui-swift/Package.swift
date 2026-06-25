@@ -1,4 +1,4 @@
-// swift-tools-version: 5.9
+// swift-tools-version: 6.2
 import PackageDescription
 
 // Empacota os fontes SwiftUI de MEngine/ como um executável macOS rodável via `swift run`.
@@ -6,7 +6,7 @@ import PackageDescription
 // NSMicrophoneUsageDescription (microfone) e NSAppTransportSecurity (HTTP localhost).
 let package = Package(
     name: "MEngineApp",
-    platforms: [.macOS(.v14)],
+    platforms: [.macOS(.v26)],
     dependencies: [
         // MarkdownUI: GFM rich rendering (headings, lists, tables, fenced code).
         // SwiftStreamingMarkdown (a 1ª opção) é iOS-only e usa iosMath/UIKit — não
@@ -28,9 +28,12 @@ let package = Package(
                     "-Xlinker", "__TEXT",
                     "-Xlinker", "__info_plist",
                     "-Xlinker",
-                    "/Users/gustavomendesesilva/Documents/m-engine/ui-swift/MEngine/Info.plist",
+                    "MEngine/Info.plist",
                 ])
             ]
         )
-    ]
+    ],
+    // macOS 26 (Liquid Glass nativo), mas Swift 5 language mode: evita o strict
+    // concurrency do Swift 6 que quebra o MarkdownUI (MarkdownText/Theme).
+    swiftLanguageModes: [.v5]
 )
