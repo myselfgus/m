@@ -25,6 +25,8 @@ struct ContentView: View {
     /// Erro de exclusão a exibir (alerta).
     @State private var deleteError: String?
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
+    @Environment(\.openWindow) private var openWindow
+    @State private var showAssistantSheet = false
 
     /// Slug do paciente selecionado (ou nil em Início/Nova sessão).
     private var currentSlug: String? {
@@ -47,17 +49,22 @@ struct ContentView: View {
         } detail: {
             detail
         }
-        // Assistente: orb flutuante que morfa em painel (substitui o chat lateral),
-        // sobre todo o dashboard, nas duas plataformas.
-        .overlay(alignment: .bottomTrailing) {
-            AssistantOrb(contextSlug: currentSlug)
-        }
         .toolbar {
             ToolbarItem {
                 Button { showNewPatient = true } label: { Image(systemName: "person.badge.plus") }
                     .help("Novo paciente")
             }
+            ToolbarItem {
+                Button { openAssistant() } label: { Image(systemName: "sparkles") }
+                    .help("Assistente")
+            }
         }
+        #if os(iOS)
+        .sheet(isPresented: $showAssistantSheet) {
+            AssistantChatScreen().environmentObject(settings)
+                .presentationDragIndicator(.visible)
+        }
+        #endif
         .task { await loadPatients() }
         .sheet(isPresented: $showSettings) { SettingsView() }
         .sheet(isPresented: $showNewPatient) {
@@ -98,6 +105,15 @@ struct ContentView: View {
     /// Binding booleano para o alerta de erro de exclusão.
     private var deleteErrorBinding: Binding<Bool> {
         Binding(get: { deleteError != nil }, set: { if !$0 { deleteError = nil } })
+    }
+
+    /// Abre o assistente: janela flutuante (macOS) ou sheet (iOS).
+    private func openAssistant() {
+        #if os(macOS)
+        openWindow(id: "assistant")
+        #else
+        showAssistantSheet = true
+        #endif
     }
 
     /// Ações de gerenciamento de um paciente (menu de contexto da sidebar).
@@ -260,6 +276,9 @@ struct SettingsView: View {
     @State private var prof = Professional()
     @State private var savingProf = false
     @State private var profSaved = false
+    // Chave da Anthropic (assistente — Messages API direta). Vive só no Keychain.
+    @State private var anthropicKey = KeychainCredentialStore().readAPIKey() ?? ""
+    @State private var anthropicKeySaved = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -312,6 +331,27 @@ struct SettingsView: View {
                 Text("API KEY (OPCIONAL)").font(.hosSubhead).foregroundStyle(.secondary)
                 SecureField("Bearer token (se houver proxy)", text: $settings.apiKey)
                     .textFieldStyle(.roundedBorder)
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("CHAVE DA ANTHROPIC (ASSISTENTE)").font(.hosSubhead).foregroundStyle(.secondary)
+                HStack(spacing: 8) {
+                    SecureField("sk-ant-…", text: $anthropicKey)
+                        .textFieldStyle(.roundedBorder)
+                        #if os(iOS)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        #endif
+                    Button("Salvar") {
+                        KeychainCredentialStore().setAPIKey(anthropicKey)
+                        anthropicKeySaved = true
+                    }
+                    .buttonStyle(.bordered)
+                }
+                Text(anthropicKeySaved
+                     ? "Chave salva no Keychain."
+                     : "O assistente fala direto com a Anthropic (Messages API). A chave fica só no Keychain do app.")
+                    .font(.hosCaption).foregroundStyle(.secondary)
             }
 
             HStack(spacing: 10) {

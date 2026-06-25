@@ -247,15 +247,6 @@ struct ChatMessage: Identifiable {
     }
 }
 
-/// Frame recebido do WebSocket do assistente: {type, text?, name?, summary?, …}.
-struct ChatEvent: Decodable {
-    let type: String
-    let text: String?
-    let name: String?
-    let summary: String?
-    let role: String?   // presente em frames {type:"history", role:"user"|"assistant"}
-}
-
 /// Perfil do próprio profissional (global ao app, servido por GET/PUT /professional).
 struct Professional: Codable, Equatable {
     var name: String = ""
