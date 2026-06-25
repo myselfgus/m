@@ -55,9 +55,17 @@ enum HOS {
     static let tintTeal = Color(hex: "0EA5B7")
 
     // ─── Superfícies (system-adaptive via .background; estes são realces) ─
-    static let divider = ink.opacity(0.08)
-    static let glassTint = blue.opacity(0.04)
+    // Hairlines fazem o trabalho que a sombra fazia: separação por linha sutil,
+    // não por elevação. Sensibilidade content-first (Claude Desktop).
+    static let divider = ink.opacity(0.06)        // separador entre linhas
+    static let hairline = ink.opacity(0.08)       // borda de card/superfície
+    static let glassTint = blue.opacity(0.035)
     static let glassHairline = Color.white.opacity(0.45)
+
+    /// Material de superfície de conteúdo plana e calma (substitui o vidro pesado
+    /// nas listas). Fino e adaptativo a claro/escuro — separação por hairline, não
+    /// por elevação. Sensibilidade content-first (Claude Desktop).
+    static let contentSurface: Material = .thinMaterial
 
     // ─── Raios ──────────────────────────────────────────────────────────
     static let rSm: CGFloat = 6
@@ -113,18 +121,20 @@ extension Font {
 // MARK: - Elevação (shadow FLOATING do design system)
 
 struct FloatingShadow: ViewModifier {
-    // --shadow-floating: 0 8px 24px -4px rgba(0,0,0,.16), 0 2px 6px rgba(0,0,0,.08)
+    // --shadow-floating: elevação para superfícies que de fato "flutuam".
+    // Refinado: mais difuso e leve (sensibilidade content-first; menos peso de glass).
     func body(content: Content) -> some View {
         content
-            .shadow(color: .black.opacity(0.16), radius: 12, x: 0, y: 8)
-            .shadow(color: .black.opacity(0.08), radius: 3, x: 0, y: 2)
+            .shadow(color: .black.opacity(0.10), radius: 16, x: 0, y: 8)
+            .shadow(color: .black.opacity(0.05), radius: 3, x: 0, y: 1)
     }
 }
 
 struct CardShadow: ViewModifier {
-    // --shadow-card: elevação sutil para superfícies estáticas
+    // --shadow-card: elevação quase imperceptível para superfícies estáticas.
+    // Refinado: trocamos a sombra por uma dica mínima — hairlines fazem o trabalho.
     func body(content: Content) -> some View {
-        content.shadow(color: .black.opacity(0.06), radius: 3, x: 0, y: 1)
+        content.shadow(color: .black.opacity(0.04), radius: 2, x: 0, y: 1)
     }
 }
 
@@ -184,12 +194,9 @@ struct GlassSurface: ViewModifier {
                 if tinted { shape.fill(HOS.glassTint) }
             }
             .overlay {
-                // glass-border: realce branco no topo decaindo (aresta de vidro)
-                shape.stroke(
-                    LinearGradient(
-                        colors: [.white.opacity(0.50), .white.opacity(0.10)],
-                        startPoint: .top, endPoint: .bottom),
-                    lineWidth: 0.6)
+                // Borda calma: hairline única em vez do realce branco de "vidro".
+                // Conteúdo sobre cromo — a separação vem da linha, não do brilho.
+                shape.strokeBorder(HOS.hairline, lineWidth: 0.75)
             }
             .clipShape(shape)
     }
@@ -262,7 +269,11 @@ struct StatusPill: View {
     }
 }
 
-// MARK: - Stat card (Home) — ícone em chip tintado + número rounded
+// MARK: - Stat card (mantido como símbolo público; refinado e mais leve)
+//
+// Não é mais o centro do dashboard (as quatro "praças de vaidade" saíram).
+// Permanece disponível para usos pontuais: superfície de conteúdo plana,
+// hairline em vez de sombra, ícone monocromático discreto.
 
 struct StatCard: View {
     let symbol: String
@@ -271,25 +282,114 @@ struct StatCard: View {
     var tint: Color = HOS.tintBlue
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            ZStack {
-                RoundedRectangle(cornerRadius: HOS.rMd, style: .continuous)
-                    .fill(tint.opacity(0.16))
-                    .frame(width: 30, height: 30)
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
                 Image(systemName: symbol)
-                    .font(.system(size: 15, weight: .semibold))
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(tint)
+                Text(label.uppercased())
+                    .font(.hosCaption)
+                    .foregroundStyle(.secondary)
+            }
+            Text(value)
+                .font(.hosStat(28))
+                .foregroundStyle(.primary)
+                .contentTransition(.numericText())
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .background(HOS.contentSurface, in: RoundedRectangle(cornerRadius: HOS.rLg, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: HOS.rLg, style: .continuous)
+                .strokeBorder(HOS.hairline, lineWidth: 0.75)
+        )
+    }
+}
+
+// MARK: - Inline stat — resumo numérico em linha (não "praça")
+
+/// Um número + rótulo discreto, para uma linha de resumo compacta no header.
+/// Substitui as quatro grandes praças de contagem por uma tira sóbria.
+struct InlineStat: View {
+    let value: String
+    let label: String
+    var systemImage: String? = nil
+    var tint: Color = .secondary
+
+    var body: some View {
+        HStack(spacing: 6) {
+            if let systemImage {
+                Image(systemName: systemImage)
+                    .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(tint)
             }
             Text(value)
-                .font(.hosStat())
+                .font(.system(size: 13, weight: .semibold, design: .rounded))
                 .foregroundStyle(.primary)
                 .contentTransition(.numericText())
             Text(label)
                 .font(.hosFootnote)
                 .foregroundStyle(.secondary)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .healthCard()
+        .fixedSize()
+    }
+}
+
+// MARK: - Lista com hairlines (superfície de conteúdo única)
+
+/// Container de conteúdo plano: uma superfície, hairlines entre as linhas.
+/// O padrão "rows com separadores" pedido para as listas do dashboard —
+/// conteúdo sobre cromo, sem praças de vidro pesadas.
+struct HairlineList<Content: View>: View {
+    let content: Content
+
+    init(@ViewBuilder content: () -> Content) {
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            content
+        }
+        .background(HOS.contentSurface, in: RoundedRectangle(cornerRadius: HOS.rLg, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: HOS.rLg, style: .continuous)
+                .strokeBorder(HOS.hairline, lineWidth: 0.75)
+        )
+    }
+}
+
+/// Cabeçalho de seção do dashboard: rótulo discreto + ação opcional à direita.
+struct SectionHeader<Trailing: View>: View {
+    let title: String
+    var systemImage: String? = nil
+    let trailing: Trailing
+
+    init(_ title: String, systemImage: String? = nil, @ViewBuilder trailing: () -> Trailing) {
+        self.title = title
+        self.systemImage = systemImage
+        self.trailing = trailing()
+    }
+
+    var body: some View {
+        HStack(spacing: 6) {
+            if let systemImage {
+                Image(systemName: systemImage)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+            Text(title.uppercased())
+                .font(.hosSubhead)
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 8)
+            trailing
+        }
+    }
+}
+
+extension SectionHeader where Trailing == EmptyView {
+    init(_ title: String, systemImage: String? = nil) {
+        self.init(title, systemImage: systemImage) { EmptyView() }
     }
 }
 

@@ -251,6 +251,37 @@ struct APIClient {
         return try await send(r, as: JobResponse.self)
     }
 
+    // MARK: - Exclusão (paciente / consulta / documento)
+
+    /// Apaga (soft-delete → lixeira) um paciente (`DELETE /patients/{slug}`).
+    func deletePatient(slug: String) async throws {
+        let s = Self.escape(slug)
+        let req = makeRequest("patients/\(s)", method: "DELETE")
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        try Self.check(resp, data)
+    }
+
+    /// Apaga uma consulta do paciente
+    /// (`DELETE /patients/{slug}/consultations/{cid}`).
+    func deleteConsultation(slug: String, consultationId: String) async throws {
+        let s = Self.escape(slug)
+        let cid = Self.escape(consultationId)
+        let req = makeRequest("patients/\(s)/consultations/\(cid)", method: "DELETE")
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        try Self.check(resp, data)
+    }
+
+    /// Apaga um documento de uma consulta
+    /// (`DELETE /patients/{slug}/consultations/{cid}/documents/{name}`).
+    func deleteDocument(slug: String, consultationId: String, name: String) async throws {
+        let s = Self.escape(slug)
+        let cid = Self.escape(consultationId)
+        let n = Self.escape(name)
+        let req = makeRequest("patients/\(s)/consultations/\(cid)/documents/\(n)", method: "DELETE")
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        try Self.check(resp, data)
+    }
+
     private static func escape(_ s: String) -> String {
         s.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? s
     }

@@ -16,6 +16,14 @@ struct ContentView: View {
     @State private var loading = false
     @State private var showSettings = false
     @State private var showNewPatient = false
+    /// Paciente cujo perfil está em edição via folha (nil = fechada).
+    @State private var editPatient: Patient?
+    /// Paciente pendente de confirmação de exclusão (nil = sem diálogo).
+    @State private var patientToDelete: Patient?
+    /// Slug em processo de exclusão (mostra estado/desabilita ação).
+    @State private var deletingSlug: String?
+    /// Erro de exclusão a exibir (alerta).
+    @State private var deleteError: String?
     // macOS: assistente abre por padrão como inspector lateral.
     // iOS: começa fechado e é aberto sob demanda (FAB + sheet) — ver body.
     #if os(macOS)
@@ -82,6 +90,66 @@ struct ContentView: View {
                 Task { await loadPatients() }
             })
         }
+        .sheet(item: $editPatient) { patient in
+            EditPatientView(slug: patient.slug) {
+                Task { await loadPatients() }
+            }
+        }
+        .confirmationDialog(
+            patientToDelete.map { "Apagar \($0.displayName)? As consultas vão para a lixeira." } ?? "",
+            isPresented: deletePatientDialogBinding,
+            titleVisibility: .visible,
+            presenting: patientToDelete
+        ) { patient in
+            Button("Apagar paciente", role: .destructive) {
+                Task { await deletePatient(patient) }
+            }
+            Button("Cancelar", role: .cancel) {}
+        }
+        .alert("Não foi possível apagar", isPresented: deleteErrorBinding) {
+            Button("OK", role: .cancel) { deleteError = nil }
+        } message: {
+            Text(deleteError ?? "")
+        }
+    }
+
+    /// Binding booleano para o diálogo de confirmação de exclusão de paciente.
+    private var deletePatientDialogBinding: Binding<Bool> {
+        Binding(get: { patientToDelete != nil }, set: { if !$0 { patientToDelete = nil } })
+    }
+
+    /// Binding booleano para o alerta de erro de exclusão.
+    private var deleteErrorBinding: Binding<Bool> {
+        Binding(get: { deleteError != nil }, set: { if !$0 { deleteError = nil } })
+    }
+
+    /// Ações de gerenciamento de um paciente (menu de contexto da sidebar).
+    @ViewBuilder
+    private func patientRowActions(_ patient: Patient) -> some View {
+        Button {
+            editPatient = patient
+        } label: {
+            Label("Editar paciente", systemImage: "person.text.rectangle")
+        }
+        Button(role: .destructive) {
+            patientToDelete = patient
+        } label: {
+            Label("Apagar paciente", systemImage: "trash")
+        }
+    }
+
+    /// Apaga o paciente (soft-delete → lixeira), atualiza a listagem e limpa a
+    /// navegação caso o paciente removido estivesse selecionado.
+    private func deletePatient(_ patient: Patient) async {
+        deletingSlug = patient.slug
+        defer { deletingSlug = nil }
+        do {
+            try await settings.makeClient().deletePatient(slug: patient.slug)
+            if currentSlug == patient.slug { nav = .home }
+            await loadPatients()
+        } catch {
+            deleteError = error.localizedDescription
+        }
     }
 
     #if os(iOS)
@@ -119,7 +187,26 @@ struct ContentView: View {
                         .font(.hosFootnote).foregroundStyle(.secondary)
                 } else {
                     ForEach(filtered) { patient in
-                        PatientRow(patient: patient).tag(Nav.patient(patient.slug))
+                        PatientRow(patient: patient, deleting: deletingSlug == patient.slug)
+                            .tag(Nav.patient(patient.slug))
+                            .contextMenu {
+                                patientRowActions(patient)
+                            }
+                            #if os(iOS)
+                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                Button(role: .destructive) {
+                                    patientToDelete = patient
+                                } label: {
+                                    Label("Apagar", systemImage: "trash")
+                                }
+                                Button {
+                                    editPatient = patient
+                                } label: {
+                                    Label("Editar", systemImage: "person.text.rectangle")
+                                }
+                                .tint(HOS.blue)
+                            }
+                            #endif
                     }
                 }
             } header: {
@@ -164,8 +251,11 @@ struct ContentView: View {
         case .nova:
             NewSessionView()
         case let .patient(slug):
-            PatientDetailView(slug: slug)
-                .id(slug)
+            PatientDetailView(slug: slug, onDeleted: {
+                nav = .home
+                Task { await loadPatients() }
+            })
+            .id(slug)
         }
     }
 
@@ -179,6 +269,7 @@ struct ContentView: View {
 /// Linha de paciente na sidebar: avatar + nome de exibição + nº de consultas.
 struct PatientRow: View {
     let patient: Patient
+    var deleting: Bool = false
     var body: some View {
         HStack(spacing: 10) {
             Image(systemName: "person.crop.circle.fill")
@@ -189,8 +280,11 @@ struct PatientRow: View {
                 Text(patient.consultationCount == 1 ? "1 consulta" : "\(patient.consultationCount) consultas")
                     .font(.hosCaption).foregroundStyle(.secondary)
             }
+            Spacer()
+            if deleting { ProgressView().controlSize(.small) }
         }
         .padding(.vertical, 2)
+        .opacity(deleting ? 0.5 : 1)
     }
 }
 

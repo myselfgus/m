@@ -8,6 +8,9 @@ import UniformTypeIdentifiers
 struct PatientDetailView: View {
     @EnvironmentObject private var settings: AppSettings
     let slug: String
+    /// Chamado quando o paciente é apagado (para a sidebar limpar a navegação
+    /// e recarregar a listagem).
+    var onDeleted: () -> Void = {}
 
     @State private var profile: PatientProfile?
     @State private var consultations: [Consultation] = []
@@ -22,10 +25,41 @@ struct PatientDetailView: View {
     /// Consulta-alvo do importador de arquivo (nil = importador fechado).
     @State private var importTarget: Consultation?
 
+    // Exclusão (paciente / consulta / documento).
+    @Environment(\.dismiss) private var dismiss
+    /// Confirmação de exclusão do paciente (toolbar/menu de detalhe).
+    @State private var confirmDeletePatient = false
+    /// Consulta pendente de confirmação de exclusão (nil = sem diálogo).
+    @State private var consultationToDelete: Consultation?
+    /// Documento pendente de confirmação de exclusão (nil = sem diálogo).
+    @State private var documentToDelete: DocRoute?
+    /// Operação destrutiva em andamento (mostra progresso e desabilita ações).
+    @State private var deleting = false
+    /// Erro de uma operação destrutiva (exibido em alerta).
+    @State private var deleteError: String?
+
     /// Rota de documento dentro de uma consulta.
-    private struct DocRoute: Hashable {
+    struct DocRoute: Hashable, Identifiable {
         let consultationId: String
         let name: String
+        var id: String { "\(consultationId)/\(name)" }
+    }
+
+    /// Overlay de progresso de exclusão (extraído do `body` p/ aliviar o type-checker).
+    @ViewBuilder
+    private var deletingOverlay: some View {
+        if deleting {
+            ZStack {
+                Color.black.opacity(0.06).ignoresSafeArea()
+                VStack(spacing: 10) {
+                    ProgressView()
+                    Text("Apagando…").font(.hosFootnote).foregroundStyle(.secondary)
+                }
+                .padding(20)
+                .raisedCard()
+            }
+            .transition(.opacity)
+        }
     }
 
     var body: some View {
@@ -36,6 +70,7 @@ struct PatientDetailView: View {
                 content
             }
             .background(.background)
+            .overlay { deletingOverlay }
             .navigationDestination(for: DocRoute.self) { route in
                 DocumentEditorView(slug: slug, consultationId: route.consultationId, name: route.name)
             }
@@ -65,6 +100,80 @@ struct PatientDetailView: View {
             }
             importTarget = nil
         }
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Menu {
+                    Button { showNewConsultation = true } label: {
+                        Label("Nova consulta", systemImage: "calendar.badge.plus")
+                    }
+                    Button { showProfileEditor = true } label: {
+                        Label("Editar perfil", systemImage: "person.text.rectangle")
+                    }
+                    .disabled(profile == nil)
+                    Divider()
+                    Button(role: .destructive) {
+                        confirmDeletePatient = true
+                    } label: {
+                        Label("Apagar paciente", systemImage: "trash")
+                    }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                }
+                .disabled(deleting)
+            }
+        }
+        .confirmationDialog(
+            "Apagar \(profile?.displayName ?? slug)? As consultas vão para a lixeira.",
+            isPresented: $confirmDeletePatient,
+            titleVisibility: .visible
+        ) {
+            Button("Apagar paciente", role: .destructive) {
+                Task { await deletePatient() }
+            }
+            Button("Cancelar", role: .cancel) {}
+        }
+        .confirmationDialog(
+            consultationToDelete.map { "Apagar a consulta \($0.id)? Os documentos vão para a lixeira." } ?? "",
+            isPresented: deleteConsultationBinding,
+            titleVisibility: .visible,
+            presenting: consultationToDelete
+        ) { consultation in
+            Button("Apagar consulta", role: .destructive) {
+                Task { await deleteConsultation(consultation) }
+            }
+            Button("Cancelar", role: .cancel) {}
+        }
+        .confirmationDialog(
+            documentToDelete.map { "Apagar o documento \($0.name)?" } ?? "",
+            isPresented: deleteDocumentBinding,
+            titleVisibility: .visible,
+            presenting: documentToDelete
+        ) { route in
+            Button("Apagar documento", role: .destructive) {
+                Task { await deleteDocument(route) }
+            }
+            Button("Cancelar", role: .cancel) {}
+        }
+        .alert("Não foi possível apagar", isPresented: deleteErrorBinding) {
+            Button("OK", role: .cancel) { deleteError = nil }
+        } message: {
+            Text(deleteError ?? "")
+        }
+    }
+
+    /// Binding booleano para o alerta de erro de exclusão.
+    private var deleteErrorBinding: Binding<Bool> {
+        Binding(get: { deleteError != nil }, set: { if !$0 { deleteError = nil } })
+    }
+
+    /// Binding booleano para o diálogo de exclusão de consulta.
+    private var deleteConsultationBinding: Binding<Bool> {
+        Binding(get: { consultationToDelete != nil }, set: { if !$0 { consultationToDelete = nil } })
+    }
+
+    /// Binding booleano para o diálogo de exclusão de documento.
+    private var deleteDocumentBinding: Binding<Bool> {
+        Binding(get: { documentToDelete != nil }, set: { if !$0 { documentToDelete = nil } })
     }
 
     /// Binding booleano derivado de `importTarget` para o `.fileImporter`.
@@ -180,6 +289,22 @@ struct PatientDetailView: View {
                             documentRow(name)
                         }
                         .buttonStyle(.plain)
+                        .contextMenu {
+                            Button(role: .destructive) {
+                                documentToDelete = DocRoute(consultationId: consultation.id, name: name)
+                            } label: {
+                                Label("Apagar documento", systemImage: "trash")
+                            }
+                        }
+                        #if os(iOS)
+                        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                            Button(role: .destructive) {
+                                documentToDelete = DocRoute(consultationId: consultation.id, name: name)
+                            } label: {
+                                Label("Apagar", systemImage: "trash")
+                            }
+                        }
+                        #endif
                     }
                 }
             }
@@ -194,7 +319,8 @@ struct PatientDetailView: View {
         .healthCard()
     }
 
-    /// Ações por consulta: novo documento e importar arquivo.
+    /// Ações por consulta: novo documento, importar arquivo e menu (•••) com
+    /// "Apagar consulta".
     private func consultationActions(_ consultation: Consultation) -> some View {
         HStack(spacing: 10) {
             Button { docTarget = consultation } label: {
@@ -208,6 +334,27 @@ struct PatientDetailView: View {
             .buttonStyle(.bordered)
             .controlSize(.small)
             Spacer()
+            Menu {
+                Button { docTarget = consultation } label: {
+                    Label("Novo documento", systemImage: "doc.badge.plus")
+                }
+                Button { importTarget = consultation } label: {
+                    Label("Importar arquivo", systemImage: "square.and.arrow.down")
+                }
+                Divider()
+                Button(role: .destructive) {
+                    consultationToDelete = consultation
+                } label: {
+                    Label("Apagar consulta", systemImage: "trash")
+                }
+            } label: {
+                Image(systemName: "ellipsis.circle")
+            }
+            .menuStyle(.borderlessButton)
+            .controlSize(.small)
+            .fixedSize()
+            .accessibilityLabel("Ações da consulta \(consultation.id)")
+            .disabled(deleting)
         }
     }
 
@@ -269,6 +416,48 @@ struct PatientDetailView: View {
             profile = await prof
         } catch {
             errorText = error.localizedDescription
+        }
+    }
+
+    /// Apaga o paciente (soft-delete → lixeira) e sai do detalhe.
+    private func deletePatient() async {
+        deleting = true
+        deleteError = nil
+        defer { deleting = false }
+        do {
+            try await settings.makeClient().deletePatient(slug: slug)
+            onDeleted()
+            dismiss()
+        } catch {
+            deleteError = error.localizedDescription
+        }
+    }
+
+    /// Apaga uma consulta e recarrega a lista.
+    private func deleteConsultation(_ consultation: Consultation) async {
+        deleting = true
+        deleteError = nil
+        defer { deleting = false }
+        do {
+            try await settings.makeClient()
+                .deleteConsultation(slug: slug, consultationId: consultation.id)
+            await load()
+        } catch {
+            deleteError = error.localizedDescription
+        }
+    }
+
+    /// Apaga um documento de uma consulta e recarrega a lista.
+    private func deleteDocument(_ route: DocRoute) async {
+        deleting = true
+        deleteError = nil
+        defer { deleting = false }
+        do {
+            try await settings.makeClient()
+                .deleteDocument(slug: slug, consultationId: route.consultationId, name: route.name)
+            await load()
+        } catch {
+            deleteError = error.localizedDescription
         }
     }
 

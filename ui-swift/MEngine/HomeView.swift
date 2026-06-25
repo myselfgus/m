@@ -1,8 +1,13 @@
 import SwiftUI
 
-/// Início do dashboard HealthOS: header com pílula de saúde do sistema,
-/// stat cards (Pacientes / Consultas / Análises / Inbox), atalhos e as
-/// consultas mais recentes do arquivo. Liquid Glass, grade de 8 pt, PT-BR sóbrio.
+/// Início do dashboard M-Engine (macOS/iOS).
+///
+/// Redesenho content-first: em vez das quatro "praças" de contagem, o clínico
+/// vê o que realmente usa — as consultas mais recentes de todo o arquivo,
+/// uma seção curta "precisa de atenção" (consultas ainda sem análise/BIRP) e
+/// ações silenciosas. Contagens viram uma tira de resumo discreta no cabeçalho,
+/// nunca o centro da tela. Listas são linhas com hairlines, não vidro pesado.
+/// Grade de 8 pt, PT-BR sóbrio, SF Symbols.
 struct HomeView: View {
     @EnvironmentObject private var settings: AppSettings
     var onOpenPatient: (String) -> Void
@@ -13,6 +18,7 @@ struct HomeView: View {
     @State private var totalConsultas = 0
     @State private var totalAnalises = 0
     @State private var recents: [RecentConsultation] = []
+    @State private var needsAttention: [RecentConsultation] = []
 
     // Estado de carregamento / saúde do sistema
     @State private var loading = false
@@ -26,7 +32,7 @@ struct HomeView: View {
         case checking, online, offline
     }
 
-    /// Uma consulta achatada com referência ao paciente, para a lista "recentes".
+    /// Uma consulta achatada com referência ao paciente, para as listas do dashboard.
     private struct RecentConsultation: Identifiable, Hashable {
         let slug: String
         let displayName: String
@@ -35,11 +41,18 @@ struct HomeView: View {
         let documents: [String]
         var id: String { "\(slug)/\(consultationId)" }
 
-        /// Chave de ordenação: usa a data quando disponível, senão o índice da consulta.
+        /// Chave de ordenação: usa a data quando disponível.
         var sortKey: String { date ?? "" }
+
+        /// Rótulos de análise derivados dos documentos (BIRP, SOAP, ASL, VDLP, GEM).
+        var kinds: [String] { HomeView.docKinds(documents) }
+
+        /// "Precisa de atenção" = consulta sem nenhuma análise clínica ainda.
+        /// (pode ter só transcrição/normalização, mas nenhum artefato derivado).
+        var needsAttention: Bool { kinds.isEmpty }
     }
 
-    // MARK: Cabeçalho
+    // MARK: Cabeçalho — data
 
     private var todayLabel: String {
         let f = DateFormatter()
@@ -50,14 +63,15 @@ struct HomeView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
+            VStack(alignment: .leading, spacing: 28) {
                 header
-                statsRow
                 quickActions
+                if !needsAttention.isEmpty { attentionSection }
                 recentSection
             }
-            .padding(24)
-            .frame(maxWidth: 920, alignment: .leading)
+            .padding(.horizontal, 32)
+            .padding(.vertical, 28)
+            .frame(maxWidth: 960, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .background {
@@ -83,17 +97,50 @@ struct HomeView: View {
     // MARK: - Header
 
     private var header: some View {
-        HStack(alignment: .top, spacing: 12) {
-            HStack(spacing: 12) {
-                BrandMark(size: 30)
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(alignment: .center, spacing: 12) {
+                BrandMark(size: 34)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("M-Engine").font(.hosLargeTitle).foregroundStyle(.primary)
-                    Text(todayLabel).font(.hosBody).foregroundStyle(.secondary)
+                    Text("M-Engine")
+                        .font(.hosLargeTitle)
+                        .foregroundStyle(.primary)
+                    Text(todayLabel)
+                        .font(.hosBody)
+                        .foregroundStyle(.secondary)
                 }
+                Spacer(minLength: 12)
+                systemHealthPill
             }
-            Spacer(minLength: 12)
-            systemHealthPill
+            summaryStrip
         }
+    }
+
+    /// Tira de resumo discreta: as contagens, agora inline e calmas — não praças.
+    private var summaryStrip: some View {
+        HStack(spacing: 18) {
+            InlineStat(value: "\(patients.count)", label: patients.count == 1 ? "paciente" : "pacientes",
+                       systemImage: "person.2", tint: HOS.tintBlue)
+            divider
+            InlineStat(value: "\(totalConsultas)", label: totalConsultas == 1 ? "consulta" : "consultas",
+                       systemImage: "calendar", tint: HOS.tintIndigo)
+            divider
+            InlineStat(value: "\(totalAnalises)", label: totalAnalises == 1 ? "análise" : "análises",
+                       systemImage: "doc.text.magnifyingglass", tint: HOS.tintPurple)
+            if !needsAttention.isEmpty {
+                divider
+                InlineStat(value: "\(needsAttention.count)", label: "a revisar",
+                           systemImage: "exclamationmark.circle", tint: HOS.review)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.leading, 2)
+        .redacted(reason: (loading && !loaded) ? .placeholder : [])
+    }
+
+    private var divider: some View {
+        Rectangle()
+            .fill(HOS.divider)
+            .frame(width: 1, height: 16)
     }
 
     @ViewBuilder
@@ -108,66 +155,99 @@ struct HomeView: View {
         }
     }
 
-    // MARK: - Stat cards
+    // MARK: - Atalhos (silenciosos)
 
-    private var statsRow: some View {
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 12)], spacing: 12) {
-            StatCard(symbol: "person.2.fill", value: "\(patients.count)",
-                     label: "Pacientes", tint: HOS.tintBlue)
-            StatCard(symbol: "calendar", value: "\(totalConsultas)",
-                     label: "Consultas", tint: HOS.tintIndigo)
-            StatCard(symbol: "doc.text.magnifyingglass", value: "\(totalAnalises)",
-                     label: "Análises", tint: HOS.tintPurple)
-            StatCard(symbol: "tray.full.fill", value: "—",
-                     label: "Áudios no inbox", tint: HOS.tintTeal)
+    private var quickActions: some View {
+        HStack(spacing: 10) {
+            Button { showNewPatient = true } label: {
+                ActionLabel("Novo paciente", systemImage: "person.crop.circle.badge.plus")
+                    .font(.hosTitle3)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(HOS.blue)
+
+            Button { onNova() } label: {
+                ActionLabel("Nova sessão", systemImage: "waveform.badge.mic")
+                    .font(.hosTitle3)
+            }
+            .buttonStyle(.bordered)
+            .tint(HOS.blue)
+
+            Spacer(minLength: 0)
         }
     }
 
-    // MARK: - Atalhos
+    // MARK: - Precisa de atenção
 
-    private var quickActions: some View {
+    private var attentionSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("AÇÕES").font(.hosSubhead).foregroundStyle(.secondary)
-            HStack(spacing: 10) {
-                Button { showNewPatient = true } label: {
-                    ActionLabel("Novo paciente", systemImage: "person.crop.circle.badge.plus")
-                        .font(.hosTitle3)
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(HOS.blue)
+            SectionHeader("Precisa de atenção", systemImage: "exclamationmark.triangle") {
+                Text(needsAttention.count == 1 ? "1 consulta" : "\(needsAttention.count) consultas")
+                    .font(.hosCaption)
+                    .foregroundStyle(.secondary)
+            }
+            Text("Consultas sem nenhuma análise clínica derivada — rode o pipeline (ASL · VDLP · GEM · BIRP) na ficha do paciente.")
+                .font(.hosFootnote)
+                .foregroundStyle(.secondary)
+                .padding(.bottom, 2)
 
-                Button { onNova() } label: {
-                    ActionLabel("Nova sessão", systemImage: "waveform.badge.mic")
-                        .font(.hosTitle3)
+            HairlineList {
+                ForEach(Array(needsAttention.prefix(5).enumerated()), id: \.element.id) { idx, item in
+                    if idx > 0 { rowSeparator }
+                    Button { onOpenPatient(item.slug) } label: {
+                        attentionRow(item)
+                    }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.bordered)
-                .tint(HOS.blue)
-
-                Button { onNova() } label: {
-                    ActionLabel("Importar áudio", systemImage: "square.and.arrow.down")
-                        .font(.hosTitle3)
-                }
-                .buttonStyle(.bordered)
-                .tint(HOS.blue)
-
-                Spacer(minLength: 0)
             }
         }
+    }
+
+    private func attentionRow(_ item: RecentConsultation) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: "exclamationmark.circle.fill")
+                .font(.system(size: 18))
+                .foregroundStyle(HOS.review)
+                .frame(width: 22)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(item.displayName)
+                    .font(.hosHeadline)
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                consultationSubtitle(item)
+            }
+
+            Spacer(minLength: 8)
+
+            StatusPill(text: "Sem análise", color: HOS.review)
+            chevron
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 11)
+        .contentShape(Rectangle())
     }
 
     // MARK: - Consultas recentes
 
     private var recentSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("CONSULTAS RECENTES").font(.hosSubhead).foregroundStyle(.secondary)
+            SectionHeader("Consultas recentes", systemImage: "clock") {
+                if !recents.isEmpty {
+                    Text("todo o arquivo")
+                        .font(.hosCaption)
+                        .foregroundStyle(.secondary)
+                }
+            }
 
             if loading && !loaded {
                 loadingState
             } else if recents.isEmpty {
                 emptyState
             } else {
-                VStack(spacing: 8) {
-                    ForEach(recents) { item in
+                HairlineList {
+                    ForEach(Array(recents.enumerated()), id: \.element.id) { idx, item in
+                        if idx > 0 { rowSeparator }
                         Button { onOpenPatient(item.slug) } label: {
                             recentRow(item)
                         }
@@ -182,65 +262,126 @@ struct HomeView: View {
         HStack(spacing: 12) {
             Image(systemName: "person.crop.circle.fill")
                 .font(.system(size: 26))
-                .foregroundStyle(HOS.navy, HOS.blue.opacity(0.18))
+                .foregroundStyle(HOS.navy, HOS.blue.opacity(0.16))
 
             VStack(alignment: .leading, spacing: 3) {
-                Text(item.displayName).font(.hosHeadline).foregroundStyle(.primary)
+                Text(item.displayName)
+                    .font(.hosHeadline)
+                    .foregroundStyle(.primary)
                     .lineLimit(1)
-                HStack(spacing: 6) {
-                    Text(item.consultationId).font(.hosMono).foregroundStyle(.secondary)
-                    if let date = item.date, !date.isEmpty {
-                        Text("·").foregroundStyle(.tertiary)
-                        Text(date).font(.hosCaption).foregroundStyle(.secondary)
-                    }
-                }
+                consultationSubtitle(item)
             }
 
             Spacer(minLength: 8)
 
-            docChips(for: item.documents)
-
-            Image(systemName: "chevron.right").foregroundStyle(.tertiary).font(.caption)
+            docChips(for: item)
+            chevron
         }
-        .healthCard(padding: 12)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 11)
+        .contentShape(Rectangle())
     }
 
-    /// Chips de estado a partir dos documentos da consulta (ex.: BIRP, GEM, SOAP, ASL).
+    /// Subtítulo de linha: Cn · data.
+    private func consultationSubtitle(_ item: RecentConsultation) -> some View {
+        HStack(spacing: 6) {
+            Text(item.consultationId)
+                .font(.hosMono)
+                .foregroundStyle(.secondary)
+            if let date = item.date, !date.isEmpty {
+                Text("·").foregroundStyle(.tertiary)
+                Text(date)
+                    .font(.hosCaption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    /// Chips de estado do pipeline a partir dos documentos da consulta.
     @ViewBuilder
-    private func docChips(for documents: [String]) -> some View {
-        let kinds = Self.docKinds(documents)
+    private func docChips(for item: RecentConsultation) -> some View {
+        let kinds = item.kinds
         if kinds.isEmpty {
-            StatusPill(text: "Sem análises", color: HOS.pending)
+            StatusPill(text: "Sem análise", color: HOS.pending)
         } else {
             HStack(spacing: 6) {
-                ForEach(kinds, id: \.self) { kind in
+                ForEach(kinds.prefix(3), id: \.self) { kind in
                     StatusPill(text: kind, color: HOS.tint(forStage: kind))
+                }
+                if kinds.count > 3 {
+                    Text("+\(kinds.count - 3)")
+                        .font(.hosCaption)
+                        .foregroundStyle(.secondary)
                 }
             }
         }
+    }
+
+    // MARK: - Peças compartilhadas
+
+    private var chevron: some View {
+        Image(systemName: "chevron.right")
+            .font(.caption)
+            .foregroundStyle(.tertiary)
+    }
+
+    /// Separador hairline entre linhas, recuado para deixar respirar.
+    private var rowSeparator: some View {
+        Rectangle()
+            .fill(HOS.divider)
+            .frame(height: 1)
+            .padding(.leading, 14)
     }
 
     // MARK: - Estados (loading / vazio)
 
     private var loadingState: some View {
-        HStack(spacing: 8) {
-            ProgressView().controlSize(.small)
-            Text("Carregando arquivo clínico…").font(.hosFootnote).foregroundStyle(.secondary)
+        HairlineList {
+            ForEach(0..<3, id: \.self) { idx in
+                if idx > 0 { rowSeparator }
+                HStack(spacing: 12) {
+                    Circle()
+                        .fill(HOS.divider)
+                        .frame(width: 26, height: 26)
+                    VStack(alignment: .leading, spacing: 5) {
+                        RoundedRectangle(cornerRadius: 3)
+                            .fill(HOS.divider)
+                            .frame(width: 140, height: 11)
+                        RoundedRectangle(cornerRadius: 3)
+                            .fill(HOS.divider)
+                            .frame(width: 80, height: 9)
+                    }
+                    Spacer()
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+            }
         }
-        .frame(maxWidth: .infinity, alignment: .center)
-        .padding(.vertical, 24)
+        .overlay(alignment: .bottom) {
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small)
+                Text("Carregando arquivo clínico…")
+                    .font(.hosFootnote)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.vertical, 10)
+        }
+        .redacted(reason: .placeholder)
     }
 
     private var emptyState: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: 12) {
             Image(systemName: "tray")
-                .font(.system(size: 30, weight: .light))
+                .font(.system(size: 28, weight: .light))
                 .foregroundStyle(HOS.blue.opacity(0.7))
             Text("Nenhuma consulta ainda")
-                .font(.hosTitle3).foregroundStyle(.primary)
-            Text("Cadastre um paciente ou inicie uma nova sessão para processar o pipeline.")
-                .font(.hosFootnote).foregroundStyle(.secondary)
+                .font(.hosTitle3)
+                .foregroundStyle(.primary)
+            Text("Cadastre um paciente ou inicie uma nova sessão para processar o pipeline clínico.")
+                .font(.hosFootnote)
+                .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
+                .frame(maxWidth: 340)
             HStack(spacing: 10) {
                 Button { showNewPatient = true } label: {
                     ActionLabel("Novo paciente", systemImage: "person.crop.circle.badge.plus")
@@ -254,22 +395,23 @@ struct HomeView: View {
             .padding(.top, 4)
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 32)
+        .padding(.vertical, 40)
         .padding(.horizontal, 16)
-        .background(
-            // Único floreio permitido: um wash radial azul de baixa opacidade.
-            RadialGradient(
-                colors: [HOS.blue.opacity(0.10), .clear],
-                center: .center, startRadius: 4, endRadius: 280
-            )
-        )
-        .healthCard()
+        .background {
+            RoundedRectangle(cornerRadius: HOS.rLg, style: .continuous)
+                .fill(HOS.contentSurface)
+                .overlay(
+                    RoundedRectangle(cornerRadius: HOS.rLg, style: .continuous)
+                        .strokeBorder(HOS.hairline, lineWidth: 0.75)
+                )
+        }
     }
 
     // MARK: - Classificação de documentos
 
     /// Deriva rótulos curtos de análise a partir dos nomes de arquivos .md.
-    /// Mantém ordem do pipeline e remove duplicatas.
+    /// Mantém ordem do pipeline e remove duplicatas. Transcrição/normalização
+    /// não contam como "análise" (são insumo, não artefato derivado).
     private static func docKinds(_ documents: [String]) -> [String] {
         var found: [String] = []
         func add(_ label: String, if predicate: Bool) {
@@ -331,15 +473,14 @@ struct HomeView: View {
         totalConsultas = consultas
         totalAnalises = analises
 
-        // Mais recentes primeiro: por data quando houver, senão por id de consulta desc.
-        recents = Array(
-            collected
-                .sorted { lhs, rhs in
-                    if lhs.sortKey != rhs.sortKey { return lhs.sortKey > rhs.sortKey }
-                    return lhs.consultationId > rhs.consultationId
-                }
-                .prefix(8)
-        )
+        // Mais recentes primeiro: por data quando houver, senão por id desc.
+        let ordered = collected.sorted { lhs, rhs in
+            if lhs.sortKey != rhs.sortKey { return lhs.sortKey > rhs.sortKey }
+            return lhs.consultationId > rhs.consultationId
+        }
+
+        recents = Array(ordered.prefix(8))
+        needsAttention = ordered.filter { $0.needsAttention }
 
         await healthCheck
         loaded = true
