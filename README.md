@@ -35,6 +35,17 @@ volume dedicado.
 
 ---
 
+## Arquitetura & módulos
+
+O **m-engine** é o backend (API + pipeline + store + providers + assistente); o cliente
+SwiftUI (**mapp**, em [`ui-swift/`](ui-swift/)) consome **apenas** a API deste serviço. Para o
+detalhamento dos módulos do backend (`api.py`, `tasks.py`, `stages/`, `store.py`,
+`providers/llm.py`, `assistant.py`, `config.py`), do modelo de dados em arquivos e do `deploy`,
+veja o [README do backend](m_engine/README.md). Contratos e fronteiras entre componentes ficam
+em [`ARCHITECTURE.md`](ARCHITECTURE.md); a referência da API, em [`docs/API.md`](docs/API.md).
+
+---
+
 ## Visão em 30 segundos
 
 A jornada de uma consulta — do gravador ao prontuário:
